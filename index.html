@@ -52,7 +52,7 @@
     color: var(--muted);
     margin: 12px 0 4px;
   }
-  input[type=email], input[type=password], input[type=text], textarea {
+  input[type=email], input[type=password], input[type=text], input[type=date], textarea {
     width: 100%;
     padding: 12px;
     border-radius: 10px;
@@ -65,8 +65,8 @@
     resize: vertical;
     min-height: 110px;
   }
-  .pw-field {
-    position: relative;
+  input[type=date] {
+    color-scheme: dark;
   }
   .pw-field input {
     padding-right: 44px;
@@ -328,6 +328,14 @@
         <div class="back-link" id="toggleNoteContent">📄 保存後のノート全文を表示</div>
         <div id="noteContentBox" class="result-box note-content hidden"></div>
       </div>
+
+      <div class="inline-panel">
+        <label>日付を指定してノートを表示</label>
+        <input type="date" id="lookupDate">
+        <button class="btn-secondary" id="lookupNoteBtn">このノートを表示</button>
+        <div id="lookupMsg" class="msg"></div>
+        <div id="lookupNoteBox" class="result-box note-content hidden"></div>
+      </div>
     </div>
   </div>
 
@@ -500,6 +508,12 @@ function enterPostView(nickname) {
   $('mainPostArea').classList.remove('hidden');
   $('userNicknameLabel').textContent = nickname;
   $('todayLabel').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+
+  // 日付指定表示欄のデフォルトを本日にする（ローカルタイムゾーン基準）
+  const now = new Date();
+  const tzOffsetMs = now.getTimezoneOffset() * 60000;
+  const localIso = new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+  $('lookupDate').value = localIso;
 }
 
 // ---------- ニックネーム編集 ----------
@@ -698,6 +712,40 @@ $('toggleNoteContent').addEventListener('click', () => {
   $('toggleNoteContent').textContent = isHidden
     ? '📄 保存後のノート全文を隠す'
     : '📄 保存後のノート全文を表示';
+});
+
+// ---------- 指定日のノート表示 ----------
+$('lookupNoteBtn').addEventListener('click', async () => {
+  const dateStr = $('lookupDate').value; // yyyy-mm-dd
+  const msgEl = $('lookupMsg');
+  const box = $('lookupNoteBox');
+  const token = localStorage.getItem('odp_token');
+
+  if (!dateStr) { setMsg(msgEl, '日付を選択してください。', 'error'); return; }
+  if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
+
+  $('lookupNoteBtn').disabled = true;
+  box.classList.add('hidden');
+  clearMsg(msgEl);
+
+  try {
+    const result = await callApi('getNoteByDate', { token, date: dateStr });
+    if (result.ok) {
+      if (result.exists) {
+        setMsg(msgEl, result.fileName + ' を表示しています。', 'success');
+        box.textContent = result.noteContent;
+        box.classList.remove('hidden');
+      } else {
+        setMsg(msgEl, result.fileName + ' はまだ作成されていません。', 'error');
+      }
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('lookupNoteBtn').disabled = false;
+  }
 });
 
 // ---------- 起動時にセッション確認 ----------
