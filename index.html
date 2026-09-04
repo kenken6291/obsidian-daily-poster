@@ -52,7 +52,7 @@
     color: var(--muted);
     margin: 12px 0 4px;
   }
-  input[type=email], input[type=password], textarea {
+  input[type=email], input[type=password], input[type=text], textarea {
     width: 100%;
     padding: 12px;
     border-radius: 10px;
@@ -64,6 +64,27 @@
   textarea {
     resize: vertical;
     min-height: 110px;
+  }
+  .pw-field {
+    position: relative;
+  }
+  .pw-field input {
+    padding-right: 44px;
+  }
+  .pw-toggle {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    width: auto;
+    padding: 4px;
+    margin: 0;
+    cursor: pointer;
+    font-size: 1.1rem;
+    color: var(--muted);
+    line-height: 1;
   }
   button {
     width: 100%;
@@ -104,6 +125,12 @@
     color: var(--muted);
   }
   .toggle-link a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .forgot-link {
+    text-align: right;
+    font-size: 0.78rem;
+    margin-top: 6px;
+  }
+  .forgot-link a { color: var(--accent); cursor: pointer; text-decoration: underline; }
   .msg {
     margin-top: 12px;
     padding: 10px 12px;
@@ -120,8 +147,14 @@
     align-items: center;
     margin-bottom: 10px;
   }
-  .top-bar .user-email { font-size: 0.75rem; color: var(--muted); }
-  .logout-link { font-size: 0.75rem; color: var(--accent); cursor: pointer; }
+  .top-bar .user-info { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .top-bar .nickname { color: var(--text); font-weight: 600; }
+  .edit-nickname-link, .logout-link, .change-pw-link {
+    font-size: 0.75rem;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .top-actions { display: flex; gap: 12px; }
   .loading {
     display: inline-block;
     width: 16px;
@@ -144,56 +177,146 @@
     white-space: pre-wrap;
     display: none;
   }
+  .inline-panel {
+    margin-top: 14px;
+    padding: 14px;
+    background: #1f2135;
+    border: 1px solid #3b3d5c;
+    border-radius: 10px;
+  }
+  .back-link {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
 
 <div class="card">
 
-  <!-- ===== 認証画面 ===== -->
-  <div id="authView">
+  <!-- ===== ログイン画面 ===== -->
+  <div id="loginView">
     <h1>Obsidian Daily Poster</h1>
     <p class="subtitle">音声・テキストで00_Dailyに直接メモを追記</p>
 
-    <div id="loginForm">
-      <label>メールアドレス</label>
-      <input type="email" id="loginEmail" placeholder="you@example.com">
-      <label>パスワード</label>
+    <label>メールアドレス</label>
+    <input type="email" id="loginEmail" placeholder="you@example.com">
+    <label>パスワード</label>
+    <div class="pw-field">
       <input type="password" id="loginPassword" placeholder="••••••••">
-      <button class="btn-primary" id="loginBtn">ログイン</button>
-      <div class="toggle-link">アカウントがない方は <a id="showRegister">会員登録</a></div>
+      <button type="button" class="pw-toggle" data-target="loginPassword">👁️</button>
     </div>
+    <div class="forgot-link"><a id="showForgot">パスワードをお忘れの方</a></div>
+    <button class="btn-primary" id="loginBtn">ログイン</button>
+    <div class="toggle-link">アカウントがない方は <a id="showRegister">会員登録</a></div>
+    <div id="loginMsg" class="msg"></div>
+  </div>
 
-    <div id="registerForm" class="hidden">
-      <label>メールアドレス</label>
-      <input type="email" id="regEmail" placeholder="you@example.com">
-      <label>パスワード（6文字以上）</label>
+  <!-- ===== 会員登録画面 ===== -->
+  <div id="registerView" class="hidden">
+    <h1>会員登録</h1>
+    <p class="subtitle">Obsidian Daily Poster</p>
+
+    <label>ニックネーム</label>
+    <input type="text" id="regNickname" placeholder="表示名（未入力可）">
+    <label>メールアドレス</label>
+    <input type="email" id="regEmail" placeholder="you@example.com">
+    <label>パスワード（6文字以上）</label>
+    <div class="pw-field">
       <input type="password" id="regPassword" placeholder="••••••••">
-      <button class="btn-primary" id="registerBtn">登録する</button>
-      <div class="toggle-link">既にアカウントがある方は <a id="showLogin">ログイン</a></div>
+      <button type="button" class="pw-toggle" data-target="regPassword">👁️</button>
     </div>
+    <button class="btn-primary" id="registerBtn">登録する</button>
+    <div class="toggle-link">既にアカウントがある方は <a id="showLoginFromRegister">ログイン</a></div>
+    <div id="registerMsg" class="msg"></div>
+  </div>
 
-    <div id="authMsg" class="msg"></div>
+  <!-- ===== パスワード忘れ画面 ===== -->
+  <div id="forgotView" class="hidden">
+    <h1>パスワードの再発行</h1>
+    <p class="subtitle">登録済みのメールアドレスに仮パスワードを送信します</p>
+
+    <label>メールアドレス</label>
+    <input type="email" id="forgotEmail" placeholder="you@example.com">
+    <button class="btn-primary" id="forgotBtn">仮パスワードを送信</button>
+    <div class="back-link" id="backToLoginFromForgot">← ログイン画面に戻る</div>
+    <div id="forgotMsg" class="msg"></div>
+  </div>
+
+  <!-- ===== 強制パスワード再登録画面（仮パスワードでログインした場合） ===== -->
+  <div id="forcedResetView" class="hidden">
+    <h1>パスワードの再登録</h1>
+    <p class="subtitle">仮パスワードでログインしました。新しいパスワードを設定してください。</p>
+
+    <label>新しいパスワード（6文字以上）</label>
+    <div class="pw-field">
+      <input type="password" id="forcedNewPassword" placeholder="••••••••">
+      <button type="button" class="pw-toggle" data-target="forcedNewPassword">👁️</button>
+    </div>
+    <label>新しいパスワード（確認）</label>
+    <div class="pw-field">
+      <input type="password" id="forcedNewPasswordConfirm" placeholder="••••••••">
+      <button type="button" class="pw-toggle" data-target="forcedNewPasswordConfirm">👁️</button>
+    </div>
+    <button class="btn-primary" id="forcedResetBtn">パスワードを再登録する</button>
+    <div id="forcedResetMsg" class="msg"></div>
   </div>
 
   <!-- ===== 投稿画面 ===== -->
   <div id="postView" class="hidden">
     <div class="top-bar">
-      <span class="user-email" id="userEmailLabel"></span>
-      <span class="logout-link" id="logoutBtn">ログアウト</span>
+      <div class="user-info">
+        <span class="nickname" id="userNicknameLabel"></span>
+        <span class="edit-nickname-link" id="editNicknameBtn">✎ 編集</span>
+      </div>
+      <div class="top-actions">
+        <span class="change-pw-link" id="changePwBtn">パスワード変更</span>
+        <span class="logout-link" id="logoutBtn">ログアウト</span>
+      </div>
     </div>
     <h1>今日のメモ</h1>
     <p class="subtitle" id="todayLabel"></p>
 
-    <button class="btn-mic" id="micBtn">🎙️ 音声入力を開始</button>
+    <!-- ニックネーム編集パネル -->
+    <div id="nicknamePanel" class="inline-panel hidden">
+      <label>ニックネーム</label>
+      <input type="text" id="nicknameInput" placeholder="表示名">
+      <button class="btn-primary" id="saveNicknameBtn">保存する</button>
+      <div class="back-link" id="cancelNicknameBtn">キャンセル</div>
+      <div id="nicknameMsg" class="msg"></div>
+    </div>
 
-    <label>内容（音声認識の結果を修正できます）</label>
-    <textarea id="noteText" placeholder="思いついたタスクやメモを話すか、入力してください"></textarea>
+    <!-- パスワード変更パネル（任意タイミング） -->
+    <div id="changePwPanel" class="inline-panel hidden">
+      <label>新しいパスワード（6文字以上）</label>
+      <div class="pw-field">
+        <input type="password" id="changePwNew" placeholder="••••••••">
+        <button type="button" class="pw-toggle" data-target="changePwNew">👁️</button>
+      </div>
+      <label>新しいパスワード（確認）</label>
+      <div class="pw-field">
+        <input type="password" id="changePwNewConfirm" placeholder="••••••••">
+        <button type="button" class="pw-toggle" data-target="changePwNewConfirm">👁️</button>
+      </div>
+      <button class="btn-primary" id="savePwBtn">パスワードを変更する</button>
+      <div class="back-link" id="cancelPwBtn">キャンセル</div>
+      <div id="changePwMsg" class="msg"></div>
+    </div>
 
-    <button class="btn-primary" id="submitBtn">Dailyノートに追記</button>
+    <div id="mainPostArea">
+      <button class="btn-mic" id="micBtn">🎙️ 音声入力を開始</button>
 
-    <div id="postMsg" class="msg"></div>
-    <div id="resultBox" class="result-box"></div>
+      <label>内容（音声認識の結果を修正できます）</label>
+      <textarea id="noteText" placeholder="思いついたタスクやメモを話すか、入力してください"></textarea>
+
+      <button class="btn-primary" id="submitBtn">Dailyノートに追記</button>
+
+      <div id="postMsg" class="msg"></div>
+      <div id="resultBox" class="result-box"></div>
+    </div>
   </div>
 
 </div>
@@ -204,33 +327,40 @@ const GAS_API_URL = 'https://script.google.com/macros/s/AKfycby89KUiJBfEt1yW_BrO
 
 const $ = (id) => document.getElementById(id);
 
-// ---------- 画面切り替え ----------
-$('showRegister').addEventListener('click', () => {
-  $('loginForm').classList.add('hidden');
-  $('registerForm').classList.remove('hidden');
-  clearAuthMsg();
-});
-$('showLogin').addEventListener('click', () => {
-  $('registerForm').classList.add('hidden');
-  $('loginForm').classList.remove('hidden');
-  clearAuthMsg();
-});
+function showOnly(viewId) {
+  ['loginView', 'registerView', 'forgotView', 'forcedResetView', 'postView'].forEach((id) => {
+    $(id).classList.toggle('hidden', id !== viewId);
+  });
+}
 
-function clearAuthMsg() {
-  const el = $('authMsg');
+function setMsg(el, text, type) {
+  el.className = 'msg ' + type;
+  el.textContent = text;
+}
+function clearMsg(el) {
   el.className = 'msg';
   el.textContent = '';
 }
-function showAuthMsg(text, type) {
-  const el = $('authMsg');
-  el.className = 'msg ' + type;
-  el.textContent = text;
-}
-function showPostMsg(text, type) {
-  const el = $('postMsg');
-  el.className = 'msg ' + type;
-  el.textContent = text;
-}
+
+// ---------- パスワード表示/非表示トグル ----------
+document.querySelectorAll('.pw-toggle').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const target = $(btn.dataset.target);
+    if (target.type === 'password') {
+      target.type = 'text';
+      btn.textContent = '🙈';
+    } else {
+      target.type = 'password';
+      btn.textContent = '👁️';
+    }
+  });
+});
+
+// ---------- 画面切り替えリンク ----------
+$('showRegister').addEventListener('click', () => showOnly('registerView'));
+$('showLoginFromRegister').addEventListener('click', () => showOnly('loginView'));
+$('showForgot').addEventListener('click', () => showOnly('forgotView'));
+$('backToLoginFromForgot').addEventListener('click', () => showOnly('loginView'));
 
 // ---------- GAS通信共通関数 ----------
 // GASのCORSプリフライトを避けるため text/plain で送信する
@@ -246,22 +376,23 @@ async function callApi(action, data) {
 
 // ---------- 会員登録 ----------
 $('registerBtn').addEventListener('click', async () => {
+  const nickname = $('regNickname').value.trim();
   const email = $('regEmail').value.trim();
   const password = $('regPassword').value;
-  if (!email || !password) { showAuthMsg('メールアドレスとパスワードを入力してください。', 'error'); return; }
+  const msgEl = $('registerMsg');
+  if (!email || !password) { setMsg(msgEl, 'メールアドレスとパスワードを入力してください。', 'error'); return; }
   $('registerBtn').disabled = true;
   try {
-    const result = await callApi('register', { email, password });
+    const result = await callApi('register', { email, password, nickname });
     if (result.ok) {
-      showAuthMsg(result.message, 'success');
-      $('registerForm').classList.add('hidden');
-      $('loginForm').classList.remove('hidden');
+      setMsg(msgEl, result.message, 'success');
       $('loginEmail').value = email;
+      showOnly('loginView');
     } else {
-      showAuthMsg(result.error, 'error');
+      setMsg(msgEl, result.error, 'error');
     }
   } catch (err) {
-    showAuthMsg(err.message, 'error');
+    setMsg(msgEl, err.message, 'error');
   } finally {
     $('registerBtn').disabled = false;
   }
@@ -271,21 +402,74 @@ $('registerBtn').addEventListener('click', async () => {
 $('loginBtn').addEventListener('click', async () => {
   const email = $('loginEmail').value.trim();
   const password = $('loginPassword').value;
-  if (!email || !password) { showAuthMsg('メールアドレスとパスワードを入力してください。', 'error'); return; }
+  const msgEl = $('loginMsg');
+  if (!email || !password) { setMsg(msgEl, 'メールアドレスとパスワードを入力してください。', 'error'); return; }
   $('loginBtn').disabled = true;
   try {
     const result = await callApi('login', { email, password });
     if (result.ok) {
       localStorage.setItem('odp_token', result.token);
       localStorage.setItem('odp_email', result.email);
-      enterPostView(result.email);
+      localStorage.setItem('odp_nickname', result.nickname || result.email);
+      if (result.requiresPasswordReset) {
+        showOnly('forcedResetView');
+      } else {
+        enterPostView(result.nickname || result.email);
+      }
     } else {
-      showAuthMsg(result.error, 'error');
+      setMsg(msgEl, result.error, 'error');
     }
   } catch (err) {
-    showAuthMsg(err.message, 'error');
+    setMsg(msgEl, err.message, 'error');
   } finally {
     $('loginBtn').disabled = false;
+  }
+});
+
+// ---------- パスワード忘れ（仮パスワード発行） ----------
+$('forgotBtn').addEventListener('click', async () => {
+  const email = $('forgotEmail').value.trim();
+  const msgEl = $('forgotMsg');
+  if (!email) { setMsg(msgEl, 'メールアドレスを入力してください。', 'error'); return; }
+  $('forgotBtn').disabled = true;
+  try {
+    const result = await callApi('forgotPassword', { email });
+    if (result.ok) {
+      setMsg(msgEl, result.message, 'success');
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('forgotBtn').disabled = false;
+  }
+});
+
+// ---------- 強制パスワード再登録（仮パスワードログイン時） ----------
+$('forcedResetBtn').addEventListener('click', async () => {
+  const newPassword = $('forcedNewPassword').value;
+  const confirmPassword = $('forcedNewPasswordConfirm').value;
+  const msgEl = $('forcedResetMsg');
+  const token = localStorage.getItem('odp_token');
+
+  if (newPassword.length < 6) { setMsg(msgEl, '新しいパスワードは6文字以上にしてください。', 'error'); return; }
+  if (newPassword !== confirmPassword) { setMsg(msgEl, '確認用パスワードが一致しません。', 'error'); return; }
+
+  $('forcedResetBtn').disabled = true;
+  try {
+    const result = await callApi('resetPassword', { token, newPassword });
+    if (result.ok) {
+      $('forcedNewPassword').value = '';
+      $('forcedNewPasswordConfirm').value = '';
+      enterPostView(localStorage.getItem('odp_nickname'));
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('forcedResetBtn').disabled = false;
   }
 });
 
@@ -293,16 +477,97 @@ $('loginBtn').addEventListener('click', async () => {
 $('logoutBtn').addEventListener('click', () => {
   localStorage.removeItem('odp_token');
   localStorage.removeItem('odp_email');
-  $('postView').classList.add('hidden');
-  $('authView').classList.remove('hidden');
+  localStorage.removeItem('odp_nickname');
+  showOnly('loginView');
 });
 
-function enterPostView(email) {
-  $('authView').classList.add('hidden');
-  $('postView').classList.remove('hidden');
-  $('userEmailLabel').textContent = email;
+function enterPostView(nickname) {
+  showOnly('postView');
+  $('nicknamePanel').classList.add('hidden');
+  $('changePwPanel').classList.add('hidden');
+  $('mainPostArea').classList.remove('hidden');
+  $('userNicknameLabel').textContent = nickname;
   $('todayLabel').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
 }
+
+// ---------- ニックネーム編集 ----------
+$('editNicknameBtn').addEventListener('click', () => {
+  $('nicknameInput').value = localStorage.getItem('odp_nickname') || '';
+  $('mainPostArea').classList.add('hidden');
+  $('changePwPanel').classList.add('hidden');
+  $('nicknamePanel').classList.remove('hidden');
+});
+$('cancelNicknameBtn').addEventListener('click', () => {
+  $('nicknamePanel').classList.add('hidden');
+  $('mainPostArea').classList.remove('hidden');
+});
+$('saveNicknameBtn').addEventListener('click', async () => {
+  const nickname = $('nicknameInput').value.trim();
+  const msgEl = $('nicknameMsg');
+  const token = localStorage.getItem('odp_token');
+  if (!nickname) { setMsg(msgEl, 'ニックネームを入力してください。', 'error'); return; }
+  $('saveNicknameBtn').disabled = true;
+  try {
+    const result = await callApi('updateNickname', { token, nickname });
+    if (result.ok) {
+      localStorage.setItem('odp_nickname', result.nickname);
+      $('userNicknameLabel').textContent = result.nickname;
+      setMsg(msgEl, 'ニックネームを更新しました。', 'success');
+      setTimeout(() => {
+        $('nicknamePanel').classList.add('hidden');
+        $('mainPostArea').classList.remove('hidden');
+        clearMsg(msgEl);
+      }, 900);
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('saveNicknameBtn').disabled = false;
+  }
+});
+
+// ---------- 任意タイミングでのパスワード変更 ----------
+$('changePwBtn').addEventListener('click', () => {
+  $('changePwNew').value = '';
+  $('changePwNewConfirm').value = '';
+  $('mainPostArea').classList.add('hidden');
+  $('nicknamePanel').classList.add('hidden');
+  $('changePwPanel').classList.remove('hidden');
+});
+$('cancelPwBtn').addEventListener('click', () => {
+  $('changePwPanel').classList.add('hidden');
+  $('mainPostArea').classList.remove('hidden');
+});
+$('savePwBtn').addEventListener('click', async () => {
+  const newPassword = $('changePwNew').value;
+  const confirmPassword = $('changePwNewConfirm').value;
+  const msgEl = $('changePwMsg');
+  const token = localStorage.getItem('odp_token');
+
+  if (newPassword.length < 6) { setMsg(msgEl, '新しいパスワードは6文字以上にしてください。', 'error'); return; }
+  if (newPassword !== confirmPassword) { setMsg(msgEl, '確認用パスワードが一致しません。', 'error'); return; }
+
+  $('savePwBtn').disabled = true;
+  try {
+    const result = await callApi('resetPassword', { token, newPassword });
+    if (result.ok) {
+      setMsg(msgEl, 'パスワードを変更しました。', 'success');
+      setTimeout(() => {
+        $('changePwPanel').classList.add('hidden');
+        $('mainPostArea').classList.remove('hidden');
+        clearMsg(msgEl);
+      }, 900);
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('savePwBtn').disabled = false;
+  }
+});
 
 // ---------- 音声入力 ----------
 let recognition = null;
@@ -343,7 +608,7 @@ function setupSpeechRecognition() {
   };
 
   recognition.onerror = (event) => {
-    showPostMsg('音声認識エラー: ' + event.error, 'error');
+    setMsg($('postMsg'), '音声認識エラー: ' + event.error, 'error');
     stopRecording();
   };
 
@@ -376,9 +641,10 @@ $('micBtn').addEventListener('click', () => {
 // ---------- メモ送信 ----------
 $('submitBtn').addEventListener('click', async () => {
   const text = $('noteText').value.trim();
-  if (!text) { showPostMsg('内容を入力するか、音声で話してください。', 'error'); return; }
+  const msgEl = $('postMsg');
+  if (!text) { setMsg(msgEl, '内容を入力するか、音声で話してください。', 'error'); return; }
   const token = localStorage.getItem('odp_token');
-  if (!token) { showPostMsg('セッションが切れています。再ログインしてください。', 'error'); return; }
+  if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
 
   if (isRecording) stopRecording();
 
@@ -389,15 +655,15 @@ $('submitBtn').addEventListener('click', async () => {
   try {
     const result = await callApi('submitNote', { token, text });
     if (result.ok) {
-      showPostMsg(result.fileName + ' に追記しました。', 'success');
+      setMsg(msgEl, result.fileName + ' に追記しました。', 'success');
       $('resultBox').style.display = 'block';
       $('resultBox').textContent = result.appended;
       $('noteText').value = '';
     } else {
-      showPostMsg(result.error, 'error');
+      setMsg(msgEl, result.error, 'error');
     }
   } catch (err) {
-    showPostMsg(err.message, 'error');
+    setMsg(msgEl, err.message, 'error');
   } finally {
     $('submitBtn').disabled = false;
     $('submitBtn').textContent = 'Dailyノートに追記';
@@ -407,9 +673,12 @@ $('submitBtn').addEventListener('click', async () => {
 // ---------- 起動時にセッション確認 ----------
 (function init() {
   const token = localStorage.getItem('odp_token');
+  const nickname = localStorage.getItem('odp_nickname');
   const email = localStorage.getItem('odp_email');
-  if (token && email) {
-    enterPostView(email);
+  if (token && (nickname || email)) {
+    enterPostView(nickname || email);
+  } else {
+    showOnly('loginView');
   }
 })();
 </script>
