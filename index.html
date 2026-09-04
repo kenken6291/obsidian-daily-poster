@@ -690,6 +690,7 @@ $('submitBtn').addEventListener('click', async () => {
         $('noteContentWrap').classList.remove('hidden');
         $('noteContentBox').textContent = result.noteContent;
         $('noteContentBox').classList.add('hidden');
+        $('noteContentBox').style.display = 'none';
         $('toggleNoteContent').textContent = '📄 保存後のノート全文を表示';
       } else {
         $('noteContentWrap').classList.add('hidden');
@@ -709,6 +710,7 @@ $('toggleNoteContent').addEventListener('click', () => {
   const box = $('noteContentBox');
   const isHidden = box.classList.contains('hidden');
   box.classList.toggle('hidden');
+  box.style.display = isHidden ? 'block' : 'none';
   $('toggleNoteContent').textContent = isHidden
     ? '📄 保存後のノート全文を隠す'
     : '📄 保存後のノート全文を表示';
@@ -726,6 +728,7 @@ $('lookupNoteBtn').addEventListener('click', async () => {
 
   $('lookupNoteBtn').disabled = true;
   box.classList.add('hidden');
+  box.style.display = 'none';
   clearMsg(msgEl);
 
   try {
@@ -735,14 +738,18 @@ $('lookupNoteBtn').addEventListener('click', async () => {
         setMsg(msgEl, result.fileName + ' を表示しています。', 'success');
         box.textContent = result.noteContent;
         box.classList.remove('hidden');
+        box.style.display = 'block';
       } else {
         setMsg(msgEl, result.fileName + ' はまだ作成されていません。', 'error');
+        box.style.display = 'none';
       }
     } else {
       setMsg(msgEl, result.error, 'error');
+      box.style.display = 'none';
     }
   } catch (err) {
     setMsg(msgEl, err.message, 'error');
+    box.style.display = 'none';
   } finally {
     $('lookupNoteBtn').disabled = false;
   }
