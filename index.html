@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obsidian Daily Poster</title>
+<style>
+  :root {
+    --bg: #1a1b26;
+    --card: #24263a;
+    --accent: #7aa2f7;
+    --accent-dark: #5a7fd6;
+    --text: #c0caf5;
+    --muted: #565f89;
+    --danger: #f7768e;
+    --success: #9ece6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 28px 24px;
+    width: 100%;
+    max-width: 420px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  }
+  h1 {
+    font-size: 1.3rem;
+    margin: 0 0 4px;
+    text-align: center;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin: 12px 0 4px;
+  }
+  input[type=email], input[type=password], textarea {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #3b3d5c;
+    background: #1f2135;
+    color: var(--text);
+    font-size: 1rem;
+  }
+  textarea {
+    resize: vertical;
+    min-height: 110px;
+  }
+  button {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 14px;
+  }
+  .btn-primary { background: var(--accent); color: #1a1b26; }
+  .btn-primary:hover { background: var(--accent-dark); }
+  .btn-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .btn-mic {
+    background: #2b2d47;
+    color: var(--text);
+    border: 1px solid #3b3d5c;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-mic.recording {
+    background: var(--danger);
+    color: #1a1b26;
+    animation: pulse 1.2s infinite;
+  }
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.6; }
+    100% { opacity: 1; }
+  }
+  .toggle-link {
+    text-align: center;
+    margin-top: 14px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .toggle-link a { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .msg {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    display: none;
+  }
+  .msg.error { background: rgba(247,118,142,0.15); color: var(--danger); display: block; }
+  .msg.success { background: rgba(158,206,106,0.15); color: var(--success); display: block; }
+  .hidden { display: none !important; }
+  .top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .top-bar .user-email { font-size: 0.75rem; color: var(--muted); }
+  .logout-link { font-size: 0.75rem; color: var(--accent); cursor: pointer; }
+  .loading {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(26,27,38,0.3);
+    border-top-color: #1a1b26;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .result-box {
+    margin-top: 14px;
+    background: #1f2135;
+    border: 1px solid #3b3d5c;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+
+  <!-- ===== 認証画面 ===== -->
+  <div id="authView">
+    <h1>Obsidian Daily Poster</h1>
+    <p class="subtitle">音声・テキストで00_Dailyに直接メモを追記</p>
+
+    <div id="loginForm">
+      <label>メールアドレス</label>
+      <input type="email" id="loginEmail" placeholder="you@example.com">
+      <label>パスワード</label>
+      <input type="password" id="loginPassword" placeholder="••••••••">
+      <button class="btn-primary" id="loginBtn">ログイン</button>
+      <div class="toggle-link">アカウントがない方は <a id="showRegister">会員登録</a></div>
+    </div>
+
+    <div id="registerForm" class="hidden">
+      <label>メールアドレス</label>
+      <input type="email" id="regEmail" placeholder="you@example.com">
+      <label>パスワード（6文字以上）</label>
+      <input type="password" id="regPassword" placeholder="••••••••">
+      <button class="btn-primary" id="registerBtn">登録する</button>
+      <div class="toggle-link">既にアカウントがある方は <a id="showLogin">ログイン</a></div>
+    </div>
+
+    <div id="authMsg" class="msg"></div>
+  </div>
+
+  <!-- ===== 投稿画面 ===== -->
+  <div id="postView" class="hidden">
+    <div class="top-bar">
+      <span class="user-email" id="userEmailLabel"></span>
+      <span class="logout-link" id="logoutBtn">ログアウト</span>
+    </div>
+    <h1>今日のメモ</h1>
+    <p class="subtitle" id="todayLabel"></p>
+
+    <button class="btn-mic" id="micBtn">🎙️ 音声入力を開始</button>
+
+    <label>内容（音声認識の結果を修正できます）</label>
+    <textarea id="noteText" placeholder="思いついたタスクやメモを話すか、入力してください"></textarea>
+
+    <button class="btn-primary" id="submitBtn">Dailyノートに追記</button>
+
+    <div id="postMsg" class="msg"></div>
+    <div id="resultBox" class="result-box"></div>
+  </div>
+
+</div>
+
+<script>
+// ★★★ ここを、GASをウェブアプリとして公開したときのURLに置き換えてください ★★★
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycby89KUiJBfEt1yW_BrOqRKhSRhg06y2HFjV9ZPbf5Vp7y8fxiNZsvtjlz3D8V3ohhhf/exec';
+
+const $ = (id) => document.getElementById(id);
+
+// ---------- 画面切り替え ----------
+$('showRegister').addEventListener('click', () => {
+  $('loginForm').classList.add('hidden');
+  $('registerForm').classList.remove('hidden');
+  clearAuthMsg();
+});
+$('showLogin').addEventListener('click', () => {
+  $('registerForm').classList.add('hidden');
+  $('loginForm').classList.remove('hidden');
+  clearAuthMsg();
+});
+
+function clearAuthMsg() {
+  const el = $('authMsg');
+  el.className = 'msg';
+  el.textContent = '';
+}
+function showAuthMsg(text, type) {
+  const el = $('authMsg');
+  el.className = 'msg ' + type;
+  el.textContent = text;
+}
+function showPostMsg(text, type) {
+  const el = $('postMsg');
+  el.className = 'msg ' + type;
+  el.textContent = text;
+}
+
+// ---------- GAS通信共通関数 ----------
+// GASのCORSプリフライトを避けるため text/plain で送信する
+async function callApi(action, data) {
+  const res = await fetch(GAS_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(Object.assign({ action }, data))
+  });
+  if (!res.ok) throw new Error('通信エラー: ' + res.status);
+  return res.json();
+}
+
+// ---------- 会員登録 ----------
+$('registerBtn').addEventListener('click', async () => {
+  const email = $('regEmail').value.trim();
+  const password = $('regPassword').value;
+  if (!email || !password) { showAuthMsg('メールアドレスとパスワードを入力してください。', 'error'); return; }
+  $('registerBtn').disabled = true;
+  try {
+    const result = await callApi('register', { email, password });
+    if (result.ok) {
+      showAuthMsg(result.message, 'success');
+      $('registerForm').classList.add('hidden');
+      $('loginForm').classList.remove('hidden');
+      $('loginEmail').value = email;
+    } else {
+      showAuthMsg(result.error, 'error');
+    }
+  } catch (err) {
+    showAuthMsg(err.message, 'error');
+  } finally {
+    $('registerBtn').disabled = false;
+  }
+});
+
+// ---------- ログイン ----------
+$('loginBtn').addEventListener('click', async () => {
+  const email = $('loginEmail').value.trim();
+  const password = $('loginPassword').value;
+  if (!email || !password) { showAuthMsg('メールアドレスとパスワードを入力してください。', 'error'); return; }
+  $('loginBtn').disabled = true;
+  try {
+    const result = await callApi('login', { email, password });
+    if (result.ok) {
+      localStorage.setItem('odp_token', result.token);
+      localStorage.setItem('odp_email', result.email);
+      enterPostView(result.email);
+    } else {
+      showAuthMsg(result.error, 'error');
+    }
+  } catch (err) {
+    showAuthMsg(err.message, 'error');
+  } finally {
+    $('loginBtn').disabled = false;
+  }
+});
+
+// ---------- ログアウト ----------
+$('logoutBtn').addEventListener('click', () => {
+  localStorage.removeItem('odp_token');
+  localStorage.removeItem('odp_email');
+  $('postView').classList.add('hidden');
+  $('authView').classList.remove('hidden');
+});
+
+function enterPostView(email) {
+  $('authView').classList.add('hidden');
+  $('postView').classList.remove('hidden');
+  $('userEmailLabel').textContent = email;
+  $('todayLabel').textContent = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+}
+
+// ---------- 音声入力 ----------
+let recognition = null;
+let isRecording = false;
+
+function setupSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    $('micBtn').disabled = true;
+    $('micBtn').textContent = '🎙️ このブラウザは音声入力に対応していません';
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.lang = 'ja-JP';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  let baseText = '';
+
+  recognition.onstart = () => {
+    baseText = $('noteText').value;
+    if (baseText && !baseText.endsWith(' ') && !baseText.endsWith('\n')) baseText += ' ';
+  };
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    let final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        final += transcript;
+      } else {
+        interim += transcript;
+      }
+    }
+    if (final) baseText += final;
+    $('noteText').value = baseText + interim;
+  };
+
+  recognition.onerror = (event) => {
+    showPostMsg('音声認識エラー: ' + event.error, 'error');
+    stopRecording();
+  };
+
+  recognition.onend = () => {
+    if (isRecording) {
+      // 継続モードが途切れた場合は再開する
+      try { recognition.start(); } catch (e) { stopRecording(); }
+    }
+  };
+}
+setupSpeechRecognition();
+
+function startRecording() {
+  if (!recognition) return;
+  isRecording = true;
+  recognition.start();
+  $('micBtn').textContent = '⏹️ 音声入力を停止';
+  $('micBtn').classList.add('recording');
+}
+function stopRecording() {
+  isRecording = false;
+  if (recognition) recognition.stop();
+  $('micBtn').textContent = '🎙️ 音声入力を開始';
+  $('micBtn').classList.remove('recording');
+}
+$('micBtn').addEventListener('click', () => {
+  if (isRecording) stopRecording(); else startRecording();
+});
+
+// ---------- メモ送信 ----------
+$('submitBtn').addEventListener('click', async () => {
+  const text = $('noteText').value.trim();
+  if (!text) { showPostMsg('内容を入力するか、音声で話してください。', 'error'); return; }
+  const token = localStorage.getItem('odp_token');
+  if (!token) { showPostMsg('セッションが切れています。再ログインしてください。', 'error'); return; }
+
+  if (isRecording) stopRecording();
+
+  $('submitBtn').disabled = true;
+  $('submitBtn').innerHTML = '<span class="loading"></span>Geminiで整形して追記中...';
+  $('resultBox').style.display = 'none';
+
+  try {
+    const result = await callApi('submitNote', { token, text });
+    if (result.ok) {
+      showPostMsg(result.fileName + ' に追記しました。', 'success');
+      $('resultBox').style.display = 'block';
+      $('resultBox').textContent = result.appended;
+      $('noteText').value = '';
+    } else {
+      showPostMsg(result.error, 'error');
+    }
+  } catch (err) {
+    showPostMsg(err.message, 'error');
+  } finally {
+    $('submitBtn').disabled = false;
+    $('submitBtn').textContent = 'Dailyノートに追記';
+  }
+});
+
+// ---------- 起動時にセッション確認 ----------
+(function init() {
+  const token = localStorage.getItem('odp_token');
+  const email = localStorage.getItem('odp_email');
+  if (token && email) {
+    enterPostView(email);
+  }
+})();
+</script>
+
+</body>
+</html>
