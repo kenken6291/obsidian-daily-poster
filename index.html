@@ -177,6 +177,13 @@
     white-space: pre-wrap;
     display: none;
   }
+  .note-content {
+    font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+    font-size: 0.78rem;
+    max-height: 320px;
+    overflow-y: auto;
+    color: #a9b1d6;
+  }
   .inline-panel {
     margin-top: 14px;
     padding: 14px;
@@ -316,6 +323,11 @@
 
       <div id="postMsg" class="msg"></div>
       <div id="resultBox" class="result-box"></div>
+
+      <div id="noteContentWrap" class="hidden">
+        <div class="back-link" id="toggleNoteContent">📄 保存後のノート全文を表示</div>
+        <div id="noteContentBox" class="result-box note-content hidden"></div>
+      </div>
     </div>
   </div>
 
@@ -659,6 +671,15 @@ $('submitBtn').addEventListener('click', async () => {
       $('resultBox').style.display = 'block';
       $('resultBox').textContent = result.appended;
       $('noteText').value = '';
+
+      if (result.noteContent) {
+        $('noteContentWrap').classList.remove('hidden');
+        $('noteContentBox').textContent = result.noteContent;
+        $('noteContentBox').classList.add('hidden');
+        $('toggleNoteContent').textContent = '📄 保存後のノート全文を表示';
+      } else {
+        $('noteContentWrap').classList.add('hidden');
+      }
     } else {
       setMsg(msgEl, result.error, 'error');
     }
@@ -668,6 +689,15 @@ $('submitBtn').addEventListener('click', async () => {
     $('submitBtn').disabled = false;
     $('submitBtn').textContent = 'Dailyノートに追記';
   }
+});
+
+$('toggleNoteContent').addEventListener('click', () => {
+  const box = $('noteContentBox');
+  const isHidden = box.classList.contains('hidden');
+  box.classList.toggle('hidden');
+  $('toggleNoteContent').textContent = isHidden
+    ? '📄 保存後のノート全文を隠す'
+    : '📄 保存後のノート全文を表示';
 });
 
 // ---------- 起動時にセッション確認 ----------
