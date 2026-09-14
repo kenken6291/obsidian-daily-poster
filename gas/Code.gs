@@ -80,6 +80,12 @@ function doPost(e) {
       case 'getNoteByDate':
         result = handleGetNoteByDate_(body);
         break;
+      case 'updateNoteByDate':
+        result = handleUpdateNoteByDate_(body);
+        break;
+      case 'deleteNoteByDate':
+        result = handleDeleteNoteByDate_(body);
+        break;
       default:
         result = { ok: false, error: '不明なアクションです: ' + action };
     }
@@ -379,6 +385,66 @@ function handleGetNoteByDate_(body) {
   var file = files.next();
   var content = file.getBlob().getDataAsString('UTF-8');
   return { ok: true, exists: true, fileName: fileName, noteContent: content };
+}
+
+/**
+ * 指定日（YYYY-MM-DD）のDailyノートを、送られてきた内容で丸ごと上書き保存する。
+ * ファイルが存在しない場合は新規作成する。加筆・修正はフロント側で全文編集して送る方式。
+ */
+function handleUpdateNoteByDate_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var dateStr = (body.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return { ok: false, error: '日付の形式が正しくありません（YYYY-MM-DD）。' };
+  }
+  if (typeof body.content !== 'string') {
+    return { ok: false, error: '保存する内容がありません。' };
+  }
+  var config = getConfig_();
+  if (!config.DAILY_FOLDER_ID) {
+    throw new Error('DAILY_FOLDER_ID が設定されていません。');
+  }
+  var folder = DriveApp.getFolderById(config.DAILY_FOLDER_ID);
+  var fileName = dateStr + '.md';
+  var files = folder.getFilesByName(fileName);
+  var file;
+  if (files.hasNext()) {
+    file = files.next();
+    file.setContent(body.content);
+  } else {
+    file = folder.createFile(fileName, body.content, MimeType.PLAIN_TEXT);
+  }
+  return { ok: true, fileName: fileName, noteContent: body.content };
+}
+
+/**
+ * 指定日（YYYY-MM-DD）のDailyノートをゴミ箱に移動する（完全削除ではない）。
+ */
+function handleDeleteNoteByDate_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var dateStr = (body.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return { ok: false, error: '日付の形式が正しくありません（YYYY-MM-DD）。' };
+  }
+  var config = getConfig_();
+  if (!config.DAILY_FOLDER_ID) {
+    throw new Error('DAILY_FOLDER_ID が設定されていません。');
+  }
+  var folder = DriveApp.getFolderById(config.DAILY_FOLDER_ID);
+  var fileName = dateStr + '.md';
+  var files = folder.getFilesByName(fileName);
+  if (!files.hasNext()) {
+    return { ok: false, error: fileName + ' は見つかりませんでした。' };
+  }
+  var file = files.next();
+  file.setTrashed(true);
+  return { ok: true, fileName: fileName };
 }
 
 /**

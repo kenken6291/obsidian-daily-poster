@@ -99,6 +99,8 @@
   .btn-primary { background: var(--accent); color: #1a1b26; }
   .btn-primary:hover { background: var(--accent-dark); }
   .btn-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover { background: rgba(247,118,142,0.12); }
   .btn-mic {
     background: #2b2d47;
     color: var(--text);
@@ -183,6 +185,17 @@
     max-height: 320px;
     overflow-y: auto;
     color: #a9b1d6;
+  }
+  .note-editable {
+    display: block;
+    width: 100%;
+    min-height: 220px;
+    resize: vertical;
+    border: 1px solid #3b3d5c;
+  }
+  .note-editable:focus {
+    outline: none;
+    border-color: var(--accent);
   }
   .inline-panel {
     margin-top: 14px;
@@ -334,7 +347,11 @@
         <input type="date" id="lookupDate">
         <button class="btn-secondary" id="lookupNoteBtn">このノートを表示</button>
         <div id="lookupMsg" class="msg"></div>
-        <div id="lookupNoteBox" class="result-box note-content hidden"></div>
+        <textarea id="lookupNoteBox" class="result-box note-content note-editable hidden"></textarea>
+        <div id="lookupEditActions" class="hidden">
+          <button class="btn-primary" id="saveLookupNoteBtn">変更を保存（加筆・修正）</button>
+          <button class="btn-danger" id="deleteLookupNoteBtn">このノートを削除</button>
+        </div>
       </div>
     </div>
   </div>
@@ -721,6 +738,7 @@ $('lookupNoteBtn').addEventListener('click', async () => {
   const dateStr = $('lookupDate').value; // yyyy-mm-dd
   const msgEl = $('lookupMsg');
   const box = $('lookupNoteBox');
+  const editActions = $('lookupEditActions');
   const token = localStorage.getItem('odp_token');
 
   if (!dateStr) { setMsg(msgEl, '日付を選択してください。', 'error'); return; }
@@ -728,30 +746,85 @@ $('lookupNoteBtn').addEventListener('click', async () => {
 
   $('lookupNoteBtn').disabled = true;
   box.classList.add('hidden');
-  box.style.display = 'none';
+  editActions.classList.add('hidden');
   clearMsg(msgEl);
 
   try {
     const result = await callApi('getNoteByDate', { token, date: dateStr });
     if (result.ok) {
       if (result.exists) {
-        setMsg(msgEl, result.fileName + ' を表示しています。', 'success');
-        box.textContent = result.noteContent;
+        setMsg(msgEl, result.fileName + ' を表示しています。内容を直接編集して保存できます。', 'success');
+        box.value = result.noteContent;
+        box.dataset.date = dateStr;
         box.classList.remove('hidden');
-        box.style.display = 'block';
+        editActions.classList.remove('hidden');
       } else {
         setMsg(msgEl, result.fileName + ' はまだ作成されていません。', 'error');
-        box.style.display = 'none';
       }
     } else {
       setMsg(msgEl, result.error, 'error');
-      box.style.display = 'none';
     }
   } catch (err) {
     setMsg(msgEl, err.message, 'error');
-    box.style.display = 'none';
   } finally {
     $('lookupNoteBtn').disabled = false;
+  }
+});
+
+// ---------- 表示中ノートの保存（加筆・修正） ----------
+$('saveLookupNoteBtn').addEventListener('click', async () => {
+  const box = $('lookupNoteBox');
+  const dateStr = box.dataset.date;
+  const msgEl = $('lookupMsg');
+  const token = localStorage.getItem('odp_token');
+
+  if (!dateStr) { setMsg(msgEl, '先にノートを表示してください。', 'error'); return; }
+  if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
+
+  $('saveLookupNoteBtn').disabled = true;
+  try {
+    const result = await callApi('updateNoteByDate', { token, date: dateStr, content: box.value });
+    if (result.ok) {
+      setMsg(msgEl, result.fileName + ' を保存しました。', 'success');
+      box.value = result.noteContent;
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('saveLookupNoteBtn').disabled = false;
+  }
+});
+
+// ---------- 表示中ノートの削除 ----------
+$('deleteLookupNoteBtn').addEventListener('click', async () => {
+  const box = $('lookupNoteBox');
+  const editActions = $('lookupEditActions');
+  const dateStr = box.dataset.date;
+  const msgEl = $('lookupMsg');
+  const token = localStorage.getItem('odp_token');
+
+  if (!dateStr) { setMsg(msgEl, '先にノートを表示してください。', 'error'); return; }
+  if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
+  if (!confirm(dateStr + ' のノートを削除します（ゴミ箱に移動）。よろしいですか？')) return;
+
+  $('deleteLookupNoteBtn').disabled = true;
+  try {
+    const result = await callApi('deleteNoteByDate', { token, date: dateStr });
+    if (result.ok) {
+      setMsg(msgEl, result.fileName + ' を削除しました。', 'success');
+      box.value = '';
+      delete box.dataset.date;
+      box.classList.add('hidden');
+      editActions.classList.add('hidden');
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('deleteLookupNoteBtn').disabled = false;
   }
 });
 
