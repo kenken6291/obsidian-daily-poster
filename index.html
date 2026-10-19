@@ -245,6 +245,27 @@
   .check-row input { width: 18px; height: 18px; }
   .btn-row { display: flex; gap: 8px; }
   .btn-row button { flex: 1; }
+  .history-tools { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .history-tools select { width: auto; flex: 1; padding: 8px; }
+  .history-tools .check-row { margin-top: 0; font-size: 0.8rem; }
+  .history-count { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+  .history-list { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; max-height: 480px; overflow-y: auto; }
+  .h-item {
+    display: flex; gap: 10px; align-items: flex-start;
+    background: #24263a; border: 1px solid #3b3d5c; border-radius: 10px; padding: 10px;
+    transition: opacity 0.3s;
+  }
+  .h-item.done { opacity: 0.5; }
+  .h-item.fade { opacity: 0; }
+  .h-item input[type=checkbox] { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; }
+  .h-body { flex: 1; min-width: 0; }
+  .h-title { font-size: 0.9rem; font-weight: 600; word-break: break-all; }
+  .h-item.done .h-title { text-decoration: line-through; }
+  .h-meta { font-size: 0.72rem; color: var(--muted); margin-top: 2px; word-break: break-all; }
+  .h-summary { font-size: 0.75rem; color: #a9b1d6; margin-top: 6px; white-space: pre-wrap; max-height: 4.8em; overflow: hidden; }
+  .h-actions { margin-top: 6px; display: flex; gap: 12px; font-size: 0.78rem; }
+  .h-actions a { color: var(--accent); cursor: pointer; }
+  .h-donebadge { font-size: 0.68rem; color: var(--success); border: 1px solid var(--success); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
   .version { text-align: center; font-size: 0.7rem; color: var(--muted); margin-top: 18px; line-height: 1.6; }
   .version .warn { color: var(--danger); }
   .version .ok { color: var(--success); }
@@ -454,6 +475,27 @@
         <div id="noteContentBox" class="result-box note-content hidden"></div>
       </div>
 
+      <!-- ===== 過去の一覧 ===== -->
+      <div class="inline-panel" id="historyPanel">
+        <div class="row-label">
+          <label style="margin-top:0">📚 過去の一覧</label>
+          <span class="mini-link" id="historyReloadBtn" style="margin-top:0">🔄 更新</span>
+        </div>
+        <div class="history-tools">
+          <select id="historyOrder">
+            <option value="desc">新しい順</option>
+            <option value="asc">古い順</option>
+          </select>
+          <div class="check-row">
+            <input type="checkbox" id="historyShowDone">
+            <label for="historyShowDone" style="margin:0">対応済みも表示</label>
+          </div>
+        </div>
+        <div class="history-count" id="historyCount"></div>
+        <div id="historyMsg" class="msg"></div>
+        <div class="history-list" id="historyList"></div>
+      </div>
+
       <div class="inline-panel">
         <label>日付を指定してノートを表示</label>
         <input type="date" id="lookupDate">
@@ -474,7 +516,7 @@
 <script src="config.js"></script>
 <script>
 // 画面（GitHub Pages側）のバージョン。GAS側 Code.gs の APP_VERSION と揃えて更新する
-const APP_VERSION = 'v2.2 (2026-10-19)';
+const APP_VERSION = 'v2.3 (2026-10-19)';
 // GASのURLは config.js で設定
 const GAS_API_URL = (window.APP_CONFIG && window.APP_CONFIG.GAS_API_URL) || '';
 
@@ -651,6 +693,9 @@ function enterPostView(nickname) {
   $('lookupDate').value = localIso;
 
   loadFolders(false);
+  const savedOrder = localStorage.getItem('odp_history_order');
+  if (savedOrder) $('historyOrder').value = savedOrder;
+  loadHistory();
 }
 
 // ---------- 保存先フォルダ一覧 ----------
@@ -1066,6 +1111,7 @@ $('draftSaveBtn').addEventListener('click', async () => {
     $('resultBox').textContent = result.appended;
     $('noteText').value = '';
     hideDraft();
+    loadHistory();
 
     if (result.noteContent) {
       $('noteContentWrap').classList.remove('hidden');
@@ -1122,6 +1168,166 @@ $('saveFormattedBtn').addEventListener('click', async () => {
     $('saveFormattedBtn').disabled = false;
   }
 });
+
+// ---------- 過去の一覧（新しい順/古い順・対応済みチェック） ----------
+async function loadHistory() {
+  const token = localStorage.getItem('odp_token');
+  if (!token) return;
+  const msgEl = $('historyMsg');
+  const list = $('historyList');
+  clearMsg(msgEl);
+  $('historyCount').textContent = '読み込み中…';
+  try {
+    const result = await callApi('listPosts', {
+      token,
+      order: $('historyOrder').value,
+      includeDone: $('historyShowDone').checked,
+      limit: 200
+    });
+    if (!result.ok) { setMsg(msgEl, result.error, 'error'); $('historyCount').textContent = ''; return; }
+    list.innerHTML = '';
+    result.posts.forEach((p) => list.appendChild(renderHistoryItem(p)));
+    updateHistoryCount(result.total, result.doneCount);
+    if (!result.posts.length) {
+      const empty = document.createElement('div');
+      empty.className = 'hint';
+      empty.textContent = $('historyShowDone').checked ? 'まだ投稿がありません。' : '未対応の投稿はありません 🎉';
+      list.appendChild(empty);
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+    $('historyCount').textContent = '';
+  }
+}
+
+let historyDoneCount = 0;
+function updateHistoryCount(total, doneCount) {
+  if (typeof doneCount === 'number') historyDoneCount = doneCount;
+  const shown = $('historyList').querySelectorAll('.h-item').length;
+  $('historyCount').textContent = $('historyShowDone').checked
+    ? shown + '件（うち対応済み ' + historyDoneCount + '件）'
+    : '未対応 ' + shown + '件（対応済み ' + historyDoneCount + '件は非表示）';
+}
+
+function renderHistoryItem(p) {
+  const item = document.createElement('div');
+  item.className = 'h-item' + (p.done ? ' done' : '');
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = p.done;
+  cb.title = '対応済み';
+  cb.addEventListener('change', () => toggleDone(p, cb, item));
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'h-body';
+
+  const title = document.createElement('div');
+  title.className = 'h-title';
+  title.textContent = p.title || '(無題)';
+  if (p.done) {
+    const b = document.createElement('span');
+    b.className = 'h-donebadge';
+    b.textContent = '対応済み';
+    title.appendChild(b);
+  }
+
+  const meta = document.createElement('div');
+  meta.className = 'h-meta';
+  meta.textContent = '🕒 ' + p.createdAt + '　' + (p.dailyOnly ? '📅 ' + p.dailyFile + '（Dailyのみ）' : '📁 ' + p.folder);
+
+  const sum = document.createElement('div');
+  sum.className = 'h-summary';
+  sum.textContent = p.summary;
+
+  const actions = document.createElement('div');
+  actions.className = 'h-actions';
+  if (p.fileId) {
+    const open = document.createElement('a');
+    open.textContent = '✏️ ノートを開く';
+    open.addEventListener('click', () => openSavedNote(p.fileId));
+    actions.appendChild(open);
+  }
+  if (p.dailyFile) {
+    const daily = document.createElement('a');
+    daily.textContent = '📅 Dailyを開く';
+    daily.addEventListener('click', () => {
+      $('lookupDate').value = p.dailyFile.replace('.md', '');
+      $('lookupNoteBtn').click();
+      $('lookupDate').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    actions.appendChild(daily);
+  }
+
+  bodyEl.append(title, meta, sum, actions);
+  item.append(cb, bodyEl);
+  return item;
+}
+
+async function toggleDone(p, cb, item) {
+  const token = localStorage.getItem('odp_token');
+  const done = cb.checked;
+  cb.disabled = true;
+  try {
+    const result = await callApi('setPostDone', { token, id: p.id, done });
+    if (!result.ok) {
+      cb.checked = !done;
+      setMsg($('historyMsg'), result.error, 'error');
+      return;
+    }
+    p.done = done;
+    historyDoneCount += done ? 1 : -1;
+    if (done && !$('historyShowDone').checked) {
+      // 一覧から外す
+      item.classList.add('fade');
+      setTimeout(() => { item.remove(); updateHistoryCount(); }, 300);
+    } else {
+      const fresh = renderHistoryItem(p);
+      item.replaceWith(fresh);
+      updateHistoryCount();
+    }
+  } catch (err) {
+    cb.checked = !done;
+    setMsg($('historyMsg'), err.message, 'error');
+  } finally {
+    cb.disabled = false;
+  }
+}
+
+async function openSavedNote(fileId) {
+  const token = localStorage.getItem('odp_token');
+  const msgEl = $('historyMsg');
+  clearMsg(msgEl);
+  try {
+    const result = await callApi('getSavedNote', { token, fileId });
+    if (!result.ok) { setMsg(msgEl, result.error, 'error'); return; }
+    savedNoteFileId = result.fileId;
+    $('formattedBox').value = result.content;
+    $('savedPath').innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = '📄 ' + result.fileName + ' ';
+    $('savedPath').appendChild(span);
+    const a = document.createElement('a');
+    a.href = result.url; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = 'Driveで開く';
+    $('savedPath').appendChild(a);
+    $('savedPath').classList.remove('hidden');
+    clearMsg($('formattedMsg'));
+    $('formattedWrap').classList.remove('hidden');
+    $('formattedEdit').classList.remove('hidden');
+    $('toggleFormatted').textContent = '✏️ 保存したノートを閉じる';
+    $('formattedWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  }
+}
+
+$('historyOrder').addEventListener('change', () => {
+  localStorage.setItem('odp_history_order', $('historyOrder').value);
+  loadHistory();
+});
+$('historyShowDone').addEventListener('change', loadHistory);
+$('historyReloadBtn').addEventListener('click', loadHistory);
 
 // ---------- 指定日のノート表示 ----------
 $('lookupNoteBtn').addEventListener('click', async () => {

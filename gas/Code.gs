@@ -21,6 +21,7 @@
  *   GEMINI_MODEL         : （任意）Geminiモデル名。未設定なら gemini-3.6-flash
  *   DEFAULT_NOTE_FOLDER  : （任意）AIが保存先を決められなかった時のフォルダ（ボルト内パス）。未設定なら 10_free_memo
  *
+ * 【v2.3 追加】投稿履歴（Postsシート）の一覧表示（新しい順/古い順）、対応済みチェックで一覧から外す。
  * 【v2.2 変更】GAS URL を config.js に分離、画面・GASのバージョン表示（不一致警告）。
  * 【v2.1 追加】Gemini整形結果をいったん画面に返し（formatNote）、ユーザーが修正してから保存（saveNote）。
  *   保存後のノートも画面から修正して上書き保存できる（updateSavedNote）。
@@ -54,7 +55,7 @@ var HEADING_LEFTOVER = '## 明日への積み残し';
 var DEPLOY_ITEM_TEXT = 'GASデプロイ版を更新し確認した';
 
 // 画面側 index.html の APP_VERSION と揃えて更新する（不一致だと画面下に警告表示）
-var APP_VERSION = 'v2.2 (2026-10-19)';
+var APP_VERSION = 'v2.3 (2026-10-19)';
 var FOLDER_CACHE_KEY = 'vault_folders_v2';
 var FOLDER_CACHE_SEC = 10 * 60;   // フォルダ一覧のキャッシュ 10分
 var FOLDER_MAX_DEPTH = 3;         // ボルト内を何階層まで候補にするか
@@ -104,6 +105,15 @@ function doPost(e) {
         break;
       case 'updateSavedNote':
         result = handleUpdateSavedNote_(body);
+        break;
+      case 'listPosts':
+        result = handleListPosts_(body);
+        break;
+      case 'setPostDone':
+        result = handleSetPostDone_(body);
+        break;
+      case 'getSavedNote':
+        result = handleGetSavedNote_(body);
         break;
       case 'listFolders':
         result = handleListFolders_(body);
@@ -421,7 +431,7 @@ function handleSaveNote_(body) {
   if (!draft.body.trim() && !draft.projects.length && !draft.workLog.length && !draft.leftover.length && !draft.deployDone) {
     return { ok: false, error: '保存する内容が空です。' };
   }
-  return saveDraft_(draft, rawText, String(body.folder || '').trim());
+  return saveDraft_(draft, rawText, String(body.folder || '').trim(), email);
 }
 
 /** 旧方式（整形→即保存）。互換のため残す。 */
@@ -436,11 +446,11 @@ function handleSubmitNote_(body) {
   }
   var folders = listVaultFolders_(false);
   var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }));
-  return saveDraft_(structured, rawText, (body.folder || '').trim() || structured.folder);
+  return saveDraft_(structured, rawText, (body.folder || '').trim() || structured.folder, email);
 }
 
 /** draft を、指定フォルダ（パス）へのノート保存＋当日Daily追記として保存する共通処理。 */
-function saveDraft_(draft, rawText, folderPath) {
+function saveDraft_(draft, rawText, folderPath, email) {
   var config = getConfig_();
   var folders = listVaultFolders_(false);
 
@@ -477,6 +487,22 @@ function saveDraft_(draft, rawText, folderPath) {
 
   var updatedContent = appendToDailyNoteTemplate_(todayFileName, daily);
 
+  // 投稿履歴に記録（一覧表示・対応済み管理用）。失敗しても保存自体は成功扱い
+  try {
+    logPost_(email, {
+      createdAt: now,
+      title: draft.title || (draft.body || '').split('\n')[0] || 'メモ',
+      folder: target.path,
+      fileId: savedNote ? savedNote.fileId : '',
+      fileName: savedNote ? savedNote.fileName : '',
+      dailyFile: todayFileName,
+      dailyOnly: isDailyOnly,
+      summary: buildSummaryText_(daily)
+    });
+  } catch (logErr) {
+    Logger.log('履歴記録エラー: ' + logErr.message);
+  }
+
   return {
     ok: true,
     fileName: todayFileName,
@@ -504,28 +530,143 @@ function handleUpdateSavedNote_(body) {
   if (!body.fileId || typeof body.content !== 'string') {
     return { ok: false, error: '保存する内容がありません。' };
   }
+  var chk = getVaultMdFile_(body.fileId);
+  if (chk.error) return { ok: false, error: chk.error };
+  chk.file.setContent(body.content);
+  return { ok: true, fileName: chk.file.getName(), content: body.content };
+}
+
+/** 保存済みノートの本文を取得（一覧から開く用） */
+function handleGetSavedNote_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var chk = getVaultMdFile_(body.fileId);
+  if (chk.error) return { ok: false, error: chk.error };
+  return {
+    ok: true,
+    fileId: body.fileId,
+    fileName: chk.file.getName(),
+    url: chk.file.getUrl(),
+    content: chk.file.getBlob().getDataAsString('UTF-8')
+  };
+}
+
+/** fileId が健二保管庫内の .md ファイルか確認して返す */
+function getVaultMdFile_(fileId) {
+  if (!fileId) return { error: 'ノートが指定されていません。' };
   var file;
   try {
-    file = DriveApp.getFileById(body.fileId);
+    file = DriveApp.getFileById(fileId);
   } catch (e) {
-    return { ok: false, error: 'ノートが見つかりません（削除された可能性があります）。' };
+    return { error: 'ノートが見つかりません（削除された可能性があります）。' };
+  }
+  if (file.isTrashed()) {
+    return { error: 'このノートはゴミ箱に移動されています。' };
   }
   if (!/\.md$/i.test(file.getName())) {
-    return { ok: false, error: 'このファイルは編集できません。' };
+    return { error: 'このファイルは編集できません。' };
   }
   var allowed = {};
   allowed[getVaultRoot_().getId()] = true;
   listVaultFolders_(false).forEach(function (f) { allowed[f.id] = true; });
   var parents = file.getParents();
-  var inVault = false;
   while (parents.hasNext()) {
-    if (allowed[parents.next().getId()]) { inVault = true; break; }
+    if (allowed[parents.next().getId()]) return { file: file };
   }
-  if (!inVault) {
-    return { ok: false, error: '健二保管庫の外のファイルは編集できません。' };
+  return { error: '健二保管庫の外のファイルは編集できません。' };
+}
+
+// ==================== 投稿履歴（Postsシート） ====================
+// A:id B:email C:createdAt D:title E:folder F:fileId G:fileName H:dailyFile I:dailyOnly J:summary K:done L:doneAt
+
+var PCOL = { ID: 0, EMAIL: 1, CREATED: 2, TITLE: 3, FOLDER: 4, FILE_ID: 5, FILE_NAME: 6, DAILY: 7, DAILY_ONLY: 8, SUMMARY: 9, DONE: 10, DONE_AT: 11 };
+
+function getPostsSheet_() {
+  var ss = getUserSheet_().getParent();
+  var sheet = ss.getSheetByName('Posts');
+  if (!sheet) {
+    sheet = ss.insertSheet('Posts');
+    sheet.appendRow(['id', 'email', 'createdAt', 'title', 'folder', 'fileId', 'fileName', 'dailyFile', 'dailyOnly', 'summary', 'done', 'doneAt']);
+    sheet.setFrozenRows(1);
   }
-  file.setContent(body.content);
-  return { ok: true, fileName: file.getName(), content: body.content };
+  return sheet;
+}
+
+function logPost_(email, p) {
+  var sheet = getPostsSheet_();
+  sheet.appendRow([
+    Utilities.getUuid(), email || '', p.createdAt, p.title, p.folder, p.fileId, p.fileName,
+    p.dailyFile, !!p.dailyOnly, String(p.summary || '').substring(0, 2000), false, ''
+  ]);
+}
+
+function isTrue_(v) { return v === true || String(v).toUpperCase() === 'TRUE'; }
+
+/**
+ * 投稿履歴の一覧。order: 'desc'（新しい順・既定）| 'asc'（古い順）
+ * includeDone: true で対応済みも含める
+ */
+function handleListPosts_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var order = body.order === 'asc' ? 'asc' : 'desc';
+  var includeDone = !!body.includeDone;
+  var limit = Math.min(Number(body.limit) || 100, 500);
+  var tz = Session.getScriptTimeZone() || 'Asia/Tokyo';
+
+  var data = getPostsSheet_().getDataRange().getValues();
+  var rows = [];
+  var doneCount = 0;
+  for (var i = 1; i < data.length; i++) {
+    var r = data[i];
+    if (String(r[PCOL.EMAIL]).toLowerCase() !== String(email).toLowerCase()) continue;
+    var done = isTrue_(r[PCOL.DONE]);
+    if (done) doneCount++;
+    if (done && !includeDone) continue;
+    var created = r[PCOL.CREATED] instanceof Date ? r[PCOL.CREATED] : new Date(r[PCOL.CREATED]);
+    rows.push({
+      id: String(r[PCOL.ID]),
+      ts: created.getTime(),
+      createdAt: Utilities.formatDate(created, tz, 'yyyy-MM-dd HH:mm'),
+      title: String(r[PCOL.TITLE] || ''),
+      folder: String(r[PCOL.FOLDER] || ''),
+      fileId: String(r[PCOL.FILE_ID] || ''),
+      fileName: String(r[PCOL.FILE_NAME] || ''),
+      dailyFile: String(r[PCOL.DAILY] || ''),
+      dailyOnly: isTrue_(r[PCOL.DAILY_ONLY]),
+      summary: String(r[PCOL.SUMMARY] || ''),
+      done: done
+    });
+  }
+  rows.sort(function (a, b) { return order === 'asc' ? a.ts - b.ts : b.ts - a.ts; });
+  var total = rows.length;
+  return { ok: true, posts: rows.slice(0, limit), total: total, doneCount: doneCount, order: order };
+}
+
+/** 対応済みフラグの切り替え（本人の投稿のみ） */
+function handleSetPostDone_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var id = String(body.id || '');
+  var done = !!body.done;
+  var sheet = getPostsSheet_();
+  var ids = sheet.getRange(1, PCOL.ID + 1, sheet.getLastRow(), 2).getValues();
+  for (var i = 1; i < ids.length; i++) {
+    if (String(ids[i][0]) === id) {
+      if (String(ids[i][1]).toLowerCase() !== String(email).toLowerCase()) {
+        return { ok: false, error: 'この投稿は変更できません。' };
+      }
+      sheet.getRange(i + 1, PCOL.DONE + 1, 1, 2).setValues([[done, done ? new Date() : '']]);
+      return { ok: true, id: id, done: done };
+    }
+  }
+  return { ok: false, error: '投稿が見つかりません。' };
 }
 
 /**
