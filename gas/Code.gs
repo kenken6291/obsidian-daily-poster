@@ -9,8 +9,6 @@
  *   # YYYY-MM-DD
  *   ## 今日触るプロジェクト
  *   ## 作業ログ / 意思決定
- *   ## デプロイ確認
- *     - [ ] GASデプロイ版を更新し確認した
  *   ## 明日への積み残し
  *
  * 【事前設定】スクリプトのプロパティ (プロジェクトの設定 > スクリプト プロパティ) に以下を登録してください。
@@ -21,6 +19,7 @@
  *   GEMINI_MODEL         : （任意）Geminiモデル名。未設定なら gemini-3.6-flash
  *   DEFAULT_NOTE_FOLDER  : （任意）AIが保存先を決められなかった時のフォルダ（ボルト内パス）。未設定なら 10_free_memo
  *
+ * 【v2.4 変更】Dailyテンプレートから「## デプロイ確認」セクションを削除（既存ノートの同セクションも追記時に除去）。
  * 【v2.3 追加】投稿履歴（Postsシート）の一覧表示（新しい順/古い順）、対応済みチェックで一覧から外す。
  * 【v2.2 変更】GAS URL を config.js に分離、画面・GASのバージョン表示（不一致警告）。
  * 【v2.1 追加】Gemini整形結果をいったん画面に返し（formatNote）、ユーザーが修正してから保存（saveNote）。
@@ -50,12 +49,12 @@ var SESSION_TTL_SEC = 6 * 60 * 60; // 6時間（CacheServiceの上限）
 // テンプレートの見出し文字列（_daily_template.md と完全一致させること）
 var HEADING_PROJECTS = '## 今日触るプロジェクト';
 var HEADING_WORKLOG = '## 作業ログ / 意思決定';
-var HEADING_DEPLOY = '## デプロイ確認';
+// 旧テンプレートの見出し（v2.4で廃止。既存ノートから除去するためだけに使う）
+var HEADING_DEPLOY_OLD = '## デプロイ確認';
 var HEADING_LEFTOVER = '## 明日への積み残し';
-var DEPLOY_ITEM_TEXT = 'GASデプロイ版を更新し確認した';
 
 // 画面側 index.html の APP_VERSION と揃えて更新する（不一致だと画面下に警告表示）
-var APP_VERSION = 'v2.3 (2026-10-19)';
+var APP_VERSION = 'v2.4 (2026-10-19)';
 var FOLDER_CACHE_KEY = 'vault_folders_v2';
 var FOLDER_CACHE_SEC = 10 * 60;   // フォルダ一覧のキャッシュ 10分
 var FOLDER_MAX_DEPTH = 3;         // ボルト内を何階層まで候補にするか
@@ -424,11 +423,10 @@ function handleSaveNote_(body) {
     tags: arr(d.tags),
     projects: arr(d.projects),
     workLog: arr(d.workLog),
-    deployDone: !!d.deployDone,
     leftover: arr(d.leftover)
   };
   var rawText = String(body.rawText || '').trim();
-  if (!draft.body.trim() && !draft.projects.length && !draft.workLog.length && !draft.leftover.length && !draft.deployDone) {
+  if (!draft.body.trim() && !draft.projects.length && !draft.workLog.length && !draft.leftover.length) {
     return { ok: false, error: '保存する内容が空です。' };
   }
   return saveDraft_(draft, rawText, String(body.folder || '').trim(), email);
@@ -469,7 +467,6 @@ function saveDraft_(draft, rawText, folderPath, email) {
   var daily = {
     projects: draft.projects.slice(),
     workLog: draft.workLog.slice(),
-    deployDone: draft.deployDone,
     leftover: draft.leftover.slice()
   };
 
@@ -924,7 +921,6 @@ function structureWithGeminiTemplate_(rawText, folderPaths) {
     '  "folder": "フォルダ一覧から選んだパス",\n' +
     '  "projects": ["今日触れた/触る予定のプロジェクト名や作業対象（短い箇条書き）"],\n' +
     '  "workLog": ["作業内容・進捗・意思決定（短い箇条書き）"],\n' +
-    '  "deployDone": true または false（GASデプロイ版の更新・確認に言及があればtrue）,\n' +
     '  "leftover": ["明日以降に持ち越すタスク（短い箇条書き）"]\n' +
     '}\n\n' +
     '該当がない配列は [] にする。分類に迷う内容は "workLog" に入れる。projects/workLog/leftover は簡潔な体言止め・常体で。';
@@ -968,7 +964,7 @@ function structureWithGeminiTemplate_(rawText, folderPaths) {
     parsed = JSON.parse(text);
   } catch (parseErr) {
     // JSONとして解釈できない場合は、原文のまま既定フォルダに保存し、Dailyにも作業ログとして残す
-    parsed = { title: 'メモ', body: rawText, tags: [], folder: '', projects: [], workLog: [rawText], deployDone: false, leftover: [] };
+    parsed = { title: 'メモ', body: rawText, tags: [], folder: '', projects: [], workLog: [rawText], leftover: [] };
   }
 
   var arr = function (v) { return Array.isArray(v) ? v.filter(Boolean).map(String) : []; };
@@ -979,7 +975,6 @@ function structureWithGeminiTemplate_(rawText, folderPaths) {
     folder: String(parsed.folder || '').trim(),
     projects: arr(parsed.projects),
     workLog: arr(parsed.workLog),
-    deployDone: !!parsed.deployDone,
     leftover: arr(parsed.leftover)
   };
 }
@@ -994,9 +989,6 @@ function buildSummaryText_(structured) {
   }
   if (structured.workLog.length) {
     blocks.push('■ 作業ログ / 意思決定\n' + structured.workLog.map(function (i) { return '- ' + i; }).join('\n'));
-  }
-  if (structured.deployDone) {
-    blocks.push('■ デプロイ確認\n- [x] ' + DEPLOY_ITEM_TEXT);
   }
   if (structured.leftover.length) {
     blocks.push('■ 明日への積み残し\n' + structured.leftover.map(function (i) { return '- ' + i; }).join('\n'));
@@ -1032,9 +1024,7 @@ function appendToDailyNoteTemplate_(fileName, structured) {
   content = insertItemsUnderHeading_(content, HEADING_PROJECTS, structured.projects);
   content = insertItemsUnderHeading_(content, HEADING_WORKLOG, structured.workLog);
   content = insertItemsUnderHeading_(content, HEADING_LEFTOVER, structured.leftover);
-  if (structured.deployDone) {
-    content = markDeployChecked_(content);
-  }
+  content = removeDeploySection_(content);
 
   if (file) {
     file.setContent(content);
@@ -1053,7 +1043,6 @@ function buildDailyTemplateSkeleton_(dateLabel) {
   return '# ' + dateLabel + '\n\n' +
     HEADING_PROJECTS + '\n- \n\n' +
     HEADING_WORKLOG + '\n- \n\n' +
-    HEADING_DEPLOY + '\n- [ ] ' + DEPLOY_ITEM_TEXT + '\n\n' +
     HEADING_LEFTOVER + '\n- \n';
 }
 
@@ -1084,15 +1073,13 @@ function insertItemsUnderHeading_(content, heading, items) {
 }
 
 /**
- * デプロイ確認のチェックボックスを [x] に更新する。
- * 既存行が見つからなければ見出し配下に新設する。
+ * 旧テンプレートの「## デプロイ確認」セクション（見出し〜次の ## 見出しの直前）を除去する。
  */
-function markDeployChecked_(content) {
-  var uncheckedLine = '- [ ] ' + DEPLOY_ITEM_TEXT;
-  var checkedLine = '- [x] ' + DEPLOY_ITEM_TEXT;
-  if (content.indexOf(checkedLine) !== -1) return content;
-  if (content.indexOf(uncheckedLine) !== -1) {
-    return content.replace(uncheckedLine, checkedLine);
-  }
-  return insertItemsUnderHeading_(content, HEADING_DEPLOY, ['[x] ' + DEPLOY_ITEM_TEXT]);
+function removeDeploySection_(content) {
+  var idx = content.indexOf(HEADING_DEPLOY_OLD);
+  if (idx === -1) return content;
+  var next = content.indexOf('\n## ', idx + HEADING_DEPLOY_OLD.length);
+  var before = content.substring(0, idx);
+  var after = next === -1 ? '' : content.substring(next + 1);
+  return (before.replace(/\n+$/, '\n\n') + after).replace(/\n{3,}/g, '\n\n');
 }

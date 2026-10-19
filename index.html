@@ -445,10 +445,6 @@
         <textarea id="draftWorkLog" class="edit-area small"></textarea>
         <label>Daily：明日への積み残し（1行1項目）</label>
         <textarea id="draftLeftover" class="edit-area small"></textarea>
-        <div class="check-row">
-          <input type="checkbox" id="draftDeploy">
-          <label for="draftDeploy" style="margin:0;color:var(--text)">GASデプロイ版を更新し確認した</label>
-        </div>
 
         <div class="btn-row">
           <button class="btn-secondary" id="draftCancelBtn">破棄</button>
@@ -516,7 +512,7 @@
 <script src="config.js"></script>
 <script>
 // 画面（GitHub Pages側）のバージョン。GAS側 Code.gs の APP_VERSION と揃えて更新する
-const APP_VERSION = 'v2.3 (2026-10-19)';
+const APP_VERSION = 'v2.4 (2026-10-19)';
 // GASのURLは config.js で設定
 const GAS_API_URL = (window.APP_CONFIG && window.APP_CONFIG.GAS_API_URL) || '';
 
@@ -1039,7 +1035,6 @@ $('submitBtn').addEventListener('click', async () => {
     $('draftProjects').value = (d.projects || []).join('\n');
     $('draftWorkLog').value = (d.workLog || []).join('\n');
     $('draftLeftover').value = (d.leftover || []).join('\n');
-    $('draftDeploy').checked = !!d.deployDone;
 
     updateDraftFolderView();
     $('draftPanel').classList.remove('hidden');
@@ -1070,8 +1065,7 @@ $('draftSaveBtn').addEventListener('click', async () => {
     tags: $('draftTags').value.split(/[,、]/).map((t) => t.trim()).filter(Boolean),
     projects: linesToArray($('draftProjects').value),
     workLog: linesToArray($('draftWorkLog').value),
-    leftover: linesToArray($('draftLeftover').value),
-    deployDone: $('draftDeploy').checked
+    leftover: linesToArray($('draftLeftover').value)
   };
   const folder = $('draftFolder').value;
 
