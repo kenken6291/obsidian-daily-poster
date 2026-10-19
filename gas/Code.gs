@@ -17,6 +17,15 @@
  *   GEMINI_API_KEY      : Gemini APIキー
  *   DAILY_FOLDER_ID      : Obsidian ボルト内「00_Daily」フォルダの Google ドライブ フォルダID
  *   USER_SHEET_ID        : ユーザー管理用スプレッドシートのID（未設定なら初回実行時に自動作成）
+ *   VAULT_FOLDER_ID      : （任意）ボルト「健二保管庫」ルートのフォルダID。未設定なら 00_Daily の親フォルダを自動採用
+ *   GEMINI_MODEL         : （任意）Geminiモデル名。未設定なら gemini-3.6-flash
+ *   DEFAULT_NOTE_FOLDER  : （任意）AIが保存先を決められなかった時のフォルダ（ボルト内パス）。未設定なら 10_free_memo
+ *
+ * 【v2.2 変更】GAS URL を config.js に分離、画面・GASのバージョン表示（不一致警告）。
+ * 【v2.1 追加】Gemini整形結果をいったん画面に返し（formatNote）、ユーザーが修正してから保存（saveNote）。
+ *   保存後のノートも画面から修正して上書き保存できる（updateSavedNote）。
+ * 【v2.0 追加】Geminiで整えたノートを、健二保管庫内の適切なフォルダへ新規ファイルとして保存し、
+ *   当日の 00_Daily にはそのノートへのリンク＋分類結果を追記する。
  *
  * 【スプレッドシート構成】シート名 "Users"
  *   A列: email  B列: salt  C列: passwordHash  D列: nickname  E列: isTempPassword  F列: createdAt
@@ -28,7 +37,10 @@ function getConfig_() {
   return {
     GEMINI_API_KEY: props.getProperty('GEMINI_API_KEY'),
     DAILY_FOLDER_ID: props.getProperty('DAILY_FOLDER_ID'),
-    USER_SHEET_ID: props.getProperty('USER_SHEET_ID')
+    USER_SHEET_ID: props.getProperty('USER_SHEET_ID'),
+    VAULT_FOLDER_ID: props.getProperty('VAULT_FOLDER_ID'),
+    GEMINI_MODEL: props.getProperty('GEMINI_MODEL') || 'gemini-3.6-flash',
+    DEFAULT_NOTE_FOLDER: props.getProperty('DEFAULT_NOTE_FOLDER') || '10_free_memo'
   };
 }
 
@@ -41,11 +53,18 @@ var HEADING_DEPLOY = '## デプロイ確認';
 var HEADING_LEFTOVER = '## 明日への積み残し';
 var DEPLOY_ITEM_TEXT = 'GASデプロイ版を更新し確認した';
 
+// 画面側 index.html の APP_VERSION と揃えて更新する（不一致だと画面下に警告表示）
+var APP_VERSION = 'v2.2 (2026-10-19)';
+var FOLDER_CACHE_KEY = 'vault_folders_v2';
+var FOLDER_CACHE_SEC = 10 * 60;   // フォルダ一覧のキャッシュ 10分
+var FOLDER_MAX_DEPTH = 3;         // ボルト内を何階層まで候補にするか
+var FOLDER_MAX_COUNT = 300;
+
 // ==================== エントリーポイント ====================
 
 function doGet(e) {
   return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, message: 'Obsidian Daily Poster API is running.' }))
+    .createTextOutput(JSON.stringify({ ok: true, message: 'Obsidian Daily Poster API is running.', version: APP_VERSION }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -76,6 +95,18 @@ function doPost(e) {
         break;
       case 'submitNote':
         result = handleSubmitNote_(body);
+        break;
+      case 'formatNote':
+        result = handleFormatNote_(body);
+        break;
+      case 'saveNote':
+        result = handleSaveNote_(body);
+        break;
+      case 'updateSavedNote':
+        result = handleUpdateSavedNote_(body);
+        break;
+      case 'listFolders':
+        result = handleListFolders_(body);
         break;
       case 'getNoteByDate':
         result = handleGetNoteByDate_(body);
@@ -247,8 +278,10 @@ function testForgotPassword() {
  */
 function testStructureNote() {
   var sample = 'nokori-monoのレシピ提案の不具合を直した。あと明日は美味しい1杯のお気に入り機能を実装する予定。GASのデプロイはさっき更新して確認済み。';
-  var result = structureWithGeminiTemplate_(sample);
-  Logger.log(JSON.stringify(result));
+  var folders = listVaultFolders_(true).map(function (f) { return f.path; });
+  Logger.log('フォルダ候補: ' + folders.join(', '));
+  var result = structureWithGeminiTemplate_(sample, folders);
+  Logger.log(JSON.stringify(result, null, 2));
 }
 
 // ==================== パスワード忘れ / 再登録 ====================
@@ -332,6 +365,66 @@ function handleUpdateNickname_(body) {
 
 // ==================== メモ投稿処理（テンプレート振り分け） ====================
 
+/**
+ * 【step1】Geminiで整形・分類・保存先提案だけを行い、保存はしない（画面で修正してもらう）。
+ */
+function handleFormatNote_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var rawText = (body.text || '').trim();
+  if (!rawText) {
+    return { ok: false, error: 'テキストが空です。' };
+  }
+  var config = getConfig_();
+  var folders = listVaultFolders_(false);
+  var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }));
+
+  var suggested = findFolderByPath_(folders, structured.folder);
+  var dailyPath = '';
+  for (var i = 0; i < folders.length; i++) {
+    if (folders[i].id === config.DAILY_FOLDER_ID) { dailyPath = folders[i].path; break; }
+  }
+  return {
+    ok: true,
+    draft: structured,
+    suggestedFolder: suggested ? suggested.path : '',
+    dailyFolder: dailyPath,
+    defaultFolder: config.DEFAULT_NOTE_FOLDER
+  };
+}
+
+/**
+ * 【step2】画面で修正された内容（draft）を保存する。
+ * folder が 00_Daily の場合はDaily追記のみ、空なら既定フォルダ。
+ */
+function handleSaveNote_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var d = body.draft || {};
+  var arr = function (v) {
+    return Array.isArray(v) ? v.map(function (x) { return String(x).trim(); }).filter(Boolean) : [];
+  };
+  var draft = {
+    title: String(d.title || '').trim() || 'メモ',
+    body: String(d.body || ''),
+    tags: arr(d.tags),
+    projects: arr(d.projects),
+    workLog: arr(d.workLog),
+    deployDone: !!d.deployDone,
+    leftover: arr(d.leftover)
+  };
+  var rawText = String(body.rawText || '').trim();
+  if (!draft.body.trim() && !draft.projects.length && !draft.workLog.length && !draft.leftover.length && !draft.deployDone) {
+    return { ok: false, error: '保存する内容が空です。' };
+  }
+  return saveDraft_(draft, rawText, String(body.folder || '').trim());
+}
+
+/** 旧方式（整形→即保存）。互換のため残す。 */
 function handleSubmitNote_(body) {
   var email = verifySession_(body.token);
   if (!email) {
@@ -341,17 +434,230 @@ function handleSubmitNote_(body) {
   if (!rawText) {
     return { ok: false, error: 'テキストが空です。' };
   }
+  var folders = listVaultFolders_(false);
+  var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }));
+  return saveDraft_(structured, rawText, (body.folder || '').trim() || structured.folder);
+}
 
-  var structured = structureWithGeminiTemplate_(rawText);
-  var todayFileName = formatDateForFile_(new Date()) + '.md';
-  var updatedContent = appendToDailyNoteTemplate_(todayFileName, structured);
+/** draft を、指定フォルダ（パス）へのノート保存＋当日Daily追記として保存する共通処理。 */
+function saveDraft_(draft, rawText, folderPath) {
+  var config = getConfig_();
+  var folders = listVaultFolders_(false);
+
+  var target = findFolderByPath_(folders, folderPath);
+  if (!target) target = findFolderByPath_(folders, config.DEFAULT_NOTE_FOLDER);
+  if (!target) {
+    var root = getVaultRoot_();
+    target = { path: '(ボルト直下)', id: root.getId() };
+  }
+
+  var now = new Date();
+  var todayFileName = formatDateForFile_(now) + '.md';
+  var isDailyOnly = (target.id === config.DAILY_FOLDER_ID);
+
+  // Daily追記用にコピー（リンク行追加で draft 自体を書き換えない）
+  var daily = {
+    projects: draft.projects.slice(),
+    workLog: draft.workLog.slice(),
+    deployDone: draft.deployDone,
+    leftover: draft.leftover.slice()
+  };
+
+  var savedNote = null;
+  if (!isDailyOnly) {
+    savedNote = saveFormattedNote_(target, draft, rawText, now);
+    daily.workLog.unshift('[[' + savedNote.baseName + ']]（📁 ' + target.path + '）');
+  } else if (!daily.projects.length && !daily.workLog.length && !daily.leftover.length && draft.body.trim()) {
+    // Dailyのみで分類項目が空なら、整形本文を作業ログに残す
+    draft.body.split('\n').forEach(function (l) {
+      var t = l.replace(/^\s*([-*]|\d+\.|#+)\s*/, '').trim();
+      if (t) daily.workLog.push(t);
+    });
+  }
+
+  var updatedContent = appendToDailyNoteTemplate_(todayFileName, daily);
 
   return {
     ok: true,
     fileName: todayFileName,
-    appended: buildSummaryText_(structured),
-    noteContent: updatedContent
+    appended: buildSummaryText_(daily),
+    noteContent: updatedContent,
+    savedNote: savedNote ? {
+      folder: target.path,
+      fileName: savedNote.fileName,
+      fileId: savedNote.fileId,
+      content: savedNote.content,
+      url: savedNote.url
+    } : null
   };
+}
+
+/**
+ * 保存済みノート（fileId）を、画面で修正した全文で上書きする。
+ * 安全のため、ボルト内フォルダにある .md ファイルのみ許可。
+ */
+function handleUpdateSavedNote_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  if (!body.fileId || typeof body.content !== 'string') {
+    return { ok: false, error: '保存する内容がありません。' };
+  }
+  var file;
+  try {
+    file = DriveApp.getFileById(body.fileId);
+  } catch (e) {
+    return { ok: false, error: 'ノートが見つかりません（削除された可能性があります）。' };
+  }
+  if (!/\.md$/i.test(file.getName())) {
+    return { ok: false, error: 'このファイルは編集できません。' };
+  }
+  var allowed = {};
+  allowed[getVaultRoot_().getId()] = true;
+  listVaultFolders_(false).forEach(function (f) { allowed[f.id] = true; });
+  var parents = file.getParents();
+  var inVault = false;
+  while (parents.hasNext()) {
+    if (allowed[parents.next().getId()]) { inVault = true; break; }
+  }
+  if (!inVault) {
+    return { ok: false, error: '健二保管庫の外のファイルは編集できません。' };
+  }
+  file.setContent(body.content);
+  return { ok: true, fileName: file.getName(), content: body.content };
+}
+
+/**
+ * Geminiが整えたノートを、指定フォルダに新規Markdownファイルとして保存する。
+ * ファイル名: yyyy-MM-dd_HHmm_タイトル.md（重複時は _2, _3...）
+ */
+function saveFormattedNote_(target, structured, rawText, now) {
+  var tz = Session.getScriptTimeZone() || 'Asia/Tokyo';
+  var stamp = Utilities.formatDate(now, tz, 'yyyy-MM-dd_HHmm');
+  var title = sanitizeFileName_(structured.title || 'メモ');
+  var folder = DriveApp.getFolderById(target.id);
+
+  var baseName = stamp + '_' + title;
+  var n = 2;
+  while (folder.getFilesByName(baseName + '.md').hasNext()) {
+    baseName = stamp + '_' + title + '_' + n;
+    n++;
+  }
+  var fileName = baseName + '.md';
+
+  var tags = (structured.tags || []).map(function (t) {
+    return String(t).replace(/^#/, '').replace(/\s+/g, '_');
+  }).filter(Boolean);
+
+  var created = Utilities.formatDate(now, tz, "yyyy-MM-dd'T'HH:mm:ss");
+  var daily = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+
+  var content =
+    '---\n' +
+    'created: ' + created + '\n' +
+    'source: obsidian-daily-poster\n' +
+    'daily: "[[' + daily + ']]"\n' +
+    'tags: [' + tags.join(', ') + ']\n' +
+    '---\n\n' +
+    '# ' + (structured.title || 'メモ') + '\n\n' +
+    (structured.body || rawText).trim() + '\n\n' +
+    '> [!quote]- 元の入力（音声認識テキスト）\n' +
+    rawText.split('\n').map(function (l) { return '> ' + l; }).join('\n') + '\n';
+
+  var file = folder.createFile(fileName, content, MimeType.PLAIN_TEXT);
+  return { baseName: baseName, fileName: fileName, fileId: file.getId(), content: content, url: file.getUrl() };
+}
+
+function sanitizeFileName_(name) {
+  var s = String(name)
+    .replace(/[\\\/:*?"<>|#^\[\]]/g, '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (s.length > 40) s = s.substring(0, 40);
+  return s || 'メモ';
+}
+
+// ==================== ボルト内フォルダ一覧 ====================
+
+function handleListFolders_(body) {
+  var email = verifySession_(body.token);
+  if (!email) {
+    return { ok: false, error: 'セッションが無効です。再度ログインしてください。' };
+  }
+  var folders = listVaultFolders_(!!body.refresh);
+  return { ok: true, folders: folders.map(function (f) { return f.path; }), version: APP_VERSION };
+}
+
+/** ボルトのルートフォルダ（VAULT_FOLDER_ID、未設定なら 00_Daily の親） */
+function getVaultRoot_() {
+  var config = getConfig_();
+  if (config.VAULT_FOLDER_ID) {
+    return DriveApp.getFolderById(config.VAULT_FOLDER_ID);
+  }
+  if (!config.DAILY_FOLDER_ID) {
+    throw new Error('DAILY_FOLDER_ID が設定されていません。');
+  }
+  var parents = DriveApp.getFolderById(config.DAILY_FOLDER_ID).getParents();
+  if (!parents.hasNext()) {
+    throw new Error('00_Daily の親フォルダ（健二保管庫）が取得できません。VAULT_FOLDER_ID を設定してください。');
+  }
+  var root = parents.next();
+  PropertiesService.getScriptProperties().setProperty('VAULT_FOLDER_ID', root.getId());
+  return root;
+}
+
+/**
+ * ボルト内のフォルダを FOLDER_MAX_DEPTH 階層まで列挙して [{path, id}] を返す。
+ * 「.」で始まるフォルダ（.obsidian / .trash 等）と「_」で始まるフォルダ（テンプレート等）は除外。
+ */
+function listVaultFolders_(forceRefresh) {
+  var cache = CacheService.getScriptCache();
+  if (!forceRefresh) {
+    var cached = cache.get(FOLDER_CACHE_KEY);
+    if (cached) {
+      try { return JSON.parse(cached); } catch (e) { /* 再取得 */ }
+    }
+  }
+  var root = getVaultRoot_();
+  var result = [];
+  var queue = [{ folder: root, path: '', depth: 0 }];
+  while (queue.length && result.length < FOLDER_MAX_COUNT) {
+    var cur = queue.shift();
+    if (cur.depth >= FOLDER_MAX_DEPTH) continue;
+    var it = cur.folder.getFolders();
+    var children = [];
+    while (it.hasNext()) {
+      var f = it.next();
+      var name = f.getName();
+      if (/^[._]/.test(name)) continue;
+      children.push(f);
+    }
+    children.sort(function (a, b) { return a.getName() < b.getName() ? -1 : 1; });
+    children.forEach(function (f) {
+      var p = cur.path ? cur.path + '/' + f.getName() : f.getName();
+      result.push({ path: p, id: f.getId() });
+      queue.push({ folder: f, path: p, depth: cur.depth + 1 });
+    });
+  }
+  result.sort(function (a, b) { return a.path < b.path ? -1 : 1; });
+  try { cache.put(FOLDER_CACHE_KEY, JSON.stringify(result), FOLDER_CACHE_SEC); } catch (e) { /* 大きすぎる場合はキャッシュしない */ }
+  return result;
+}
+
+function findFolderByPath_(folders, path) {
+  if (!path) return null;
+  var norm = String(path).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
+  for (var i = 0; i < folders.length; i++) {
+    if (folders[i].path === norm) return folders[i];
+  }
+  // 末尾フォルダ名だけで一致するものがあれば採用
+  for (var j = 0; j < folders.length; j++) {
+    var last = folders[j].path.split('/').pop();
+    if (last === norm) return folders[j];
+  }
+  return null;
 }
 
 function formatDateForFile_(date) {
@@ -448,33 +754,47 @@ function handleDeleteNoteByDate_(body) {
 }
 
 /**
- * Geminiに、テンプレートの4区分（プロジェクト／作業ログ・意思決定／デプロイ確認／積み残し）へ
- * 分類させ、JSONで受け取る。
+ * Geminiに ①入力を読みやすいMarkdownノートに整形 ②保存先フォルダ選択
+ * ③Dailyテンプレート4区分への分類 をまとめて行わせ、JSONで受け取る。
  */
-function structureWithGeminiTemplate_(rawText) {
+function structureWithGeminiTemplate_(rawText, folderPaths) {
   var config = getConfig_();
   if (!config.GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。');
   }
+  folderPaths = folderPaths || [];
 
   var systemPrompt =
-    'あなたはObsidianのDailyノート整理アシスタントです。入力された雑多な音声書き起こしやテキストを、' +
-    '次のJSON形式「だけ」で出力してください。前後の挨拶・説明・Markdownのコードブロック記号（```）は' +
-    '絶対に付けないでください。\n\n' +
+    'あなたはObsidianボルト「健二保管庫」の整理アシスタントです。入力は音声認識の書き起こし（言い淀み・誤変換・句読点なしを含む）またはテキストです。\n' +
+    '次の作業を行い、指定のJSON「だけ」を出力してください。前後の説明やコードブロック記号（```）は付けないでください。\n\n' +
+    '【作業】\n' +
+    '1. 内容を読みやすいMarkdownノートに整える（フィラー「えー」「あの」等の除去、明らかな誤変換の修正、句読点付与、必要なら「## 見出し」や箇条書きで整理）。意味は変えず、情報を勝手に追加しない。\n' +
+    '2. ノートの短いタイトル（20文字以内、ファイル名に使える文字のみ）を付ける。\n' +
+    '3. 下の【フォルダ一覧】から、このノートを保存するのに最も適したフォルダを1つ選び、一覧の文字列をそのまま返す。\n' +
+    '   その日の作業記録・日記的な短いメモで、独立したノートにする価値が薄い場合は「00_Daily」を選ぶ（一覧にあれば）。\n' +
+    '   適切なものがなければ空文字 "" にする。\n' +
+    '4. 当日のDailyノート用に、テンプレートの4区分へ分類する。\n\n' +
+    '【フォルダ一覧】\n' + (folderPaths.length ? folderPaths.map(function (p) { return '- ' + p; }).join('\n') : '（なし）') + '\n\n' +
+    '【出力JSON形式】\n' +
     '{\n' +
-    '  "projects": ["今日触れた/触る予定のプロジェクト名や作業対象を短い箇条書きで"],\n' +
-    '  "workLog": ["作業内容・進捗・意思決定を短い箇条書きで"],\n' +
-    '  "deployDone": true または false （GASデプロイ版の更新・確認について言及されていればtrue、それ以外はfalse）,\n' +
-    '  "leftover": ["明日以降に持ち越すタスクを短い箇条書きで"]\n' +
+    '  "title": "ノートタイトル",\n' +
+    '  "body": "整形済みのMarkdown本文（タイトル行 # は含めない。改行は\\nで表現）",\n' +
+    '  "tags": ["関連タグ（#なし、2〜5個）"],\n' +
+    '  "folder": "フォルダ一覧から選んだパス",\n' +
+    '  "projects": ["今日触れた/触る予定のプロジェクト名や作業対象（短い箇条書き）"],\n' +
+    '  "workLog": ["作業内容・進捗・意思決定（短い箇条書き）"],\n' +
+    '  "deployDone": true または false（GASデプロイ版の更新・確認に言及があればtrue）,\n' +
+    '  "leftover": ["明日以降に持ち越すタスク（短い箇条書き）"]\n' +
     '}\n\n' +
-    '該当する内容がない項目は空配列 [] にしてください。分類に迷う内容は "workLog" に入れてください。' +
-    '各項目の文章は簡潔な体言止め・常体でまとめてください。';
+    '該当がない配列は [] にする。分類に迷う内容は "workLog" に入れる。projects/workLog/leftover は簡潔な体言止め・常体で。';
 
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=' + config.GEMINI_API_KEY;
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + config.GEMINI_MODEL +
+    ':generateContent?key=' + config.GEMINI_API_KEY;
   var payload = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt + '\n\n【入力】\n' + rawText }] }
-    ]
+    ],
+    generationConfig: { responseMimeType: 'application/json', temperature: 0.3 }
   };
   var options = {
     method: 'post',
@@ -506,15 +826,20 @@ function structureWithGeminiTemplate_(rawText) {
   try {
     parsed = JSON.parse(text);
   } catch (parseErr) {
-    // JSONとして解釈できない場合は、全文を作業ログ扱いにして保存だけは継続する
-    parsed = { projects: [], workLog: [rawText], deployDone: false, leftover: [] };
+    // JSONとして解釈できない場合は、原文のまま既定フォルダに保存し、Dailyにも作業ログとして残す
+    parsed = { title: 'メモ', body: rawText, tags: [], folder: '', projects: [], workLog: [rawText], deployDone: false, leftover: [] };
   }
 
+  var arr = function (v) { return Array.isArray(v) ? v.filter(Boolean).map(String) : []; };
   return {
-    projects: Array.isArray(parsed.projects) ? parsed.projects.filter(Boolean) : [],
-    workLog: Array.isArray(parsed.workLog) ? parsed.workLog.filter(Boolean) : [],
+    title: String(parsed.title || 'メモ').trim(),
+    body: String(parsed.body || rawText),
+    tags: arr(parsed.tags),
+    folder: String(parsed.folder || '').trim(),
+    projects: arr(parsed.projects),
+    workLog: arr(parsed.workLog),
     deployDone: !!parsed.deployDone,
-    leftover: Array.isArray(parsed.leftover) ? parsed.leftover.filter(Boolean) : []
+    leftover: arr(parsed.leftover)
   };
 }
 

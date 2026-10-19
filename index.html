@@ -230,7 +230,35 @@
     word-break: break-all;
   }
   .saved-path a { color: var(--accent); }
-  .version { text-align: center; font-size: 0.7rem; color: var(--muted); margin-top: 18px; }
+  .edit-area {
+    width: 100%;
+    min-height: 200px;
+    font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  .edit-area.small { min-height: 70px; }
+  .draft-panel { border-color: var(--accent); }
+  .draft-panel h2 { font-size: 1rem; margin: 0 0 4px; }
+  .hint { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+  .check-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.85rem; }
+  .check-row input { width: 18px; height: 18px; }
+  .btn-row { display: flex; gap: 8px; }
+  .btn-row button { flex: 1; }
+  .version { text-align: center; font-size: 0.7rem; color: var(--muted); margin-top: 18px; line-height: 1.6; }
+  .version .warn { color: var(--danger); }
+  .version .ok { color: var(--success); }
+  .ver-badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    color: var(--muted);
+    border: 1px solid #3b3d5c;
+    border-radius: 999px;
+    padding: 1px 8px;
+    margin-left: 6px;
+    vertical-align: middle;
+    font-weight: normal;
+  }
   .back-link {
     display: inline-block;
     margin-top: 10px;
@@ -246,7 +274,7 @@
 
   <!-- ===== ログイン画面 ===== -->
   <div id="loginView">
-    <h1>Obsidian Daily Poster</h1>
+    <h1>Obsidian Daily Poster <span class="ver-badge app-ver"></span></h1>
     <p class="subtitle">音声・テキストをGeminiで整えて健二保管庫に保存</p>
 
     <label>メールアドレス</label>
@@ -324,7 +352,7 @@
         <span class="logout-link" id="logoutBtn">ログアウト</span>
       </div>
     </div>
-    <h1>今日のメモ</h1>
+    <h1>今日のメモ <span class="ver-badge app-ver"></span></h1>
     <p class="subtitle" id="todayLabel"></p>
 
     <!-- ニックネーム編集パネル -->
@@ -368,15 +396,57 @@
         <option value="">🤖 AIにおまかせ</option>
       </select>
 
-      <button class="btn-primary" id="submitBtn">Geminiで整えて保存</button>
+      <button class="btn-primary" id="submitBtn">Geminiで整える（確認・修正してから保存）</button>
 
       <div id="postMsg" class="msg"></div>
+
+      <!-- ===== Gemini整形結果の確認・修正パネル ===== -->
+      <div id="draftPanel" class="inline-panel draft-panel hidden">
+        <h2>📝 Geminiで整えた内容を確認・修正</h2>
+        <div class="hint">自由に書き換えてから「この内容で保存」を押してください。</div>
+
+        <label>保存先フォルダ</label>
+        <select id="draftFolder"></select>
+        <div class="hint" id="draftFolderHint"></div>
+
+        <div id="draftNoteFields">
+          <label>タイトル</label>
+          <input type="text" id="draftTitle">
+          <label>本文（Markdown）</label>
+          <textarea id="draftBody" class="edit-area"></textarea>
+          <label>タグ（カンマ区切り）</label>
+          <input type="text" id="draftTags" placeholder="例: 仕事, 議事録">
+        </div>
+
+        <label>Daily：今日触るプロジェクト（1行1項目）</label>
+        <textarea id="draftProjects" class="edit-area small"></textarea>
+        <label>Daily：作業ログ / 意思決定（1行1項目）</label>
+        <textarea id="draftWorkLog" class="edit-area small"></textarea>
+        <label>Daily：明日への積み残し（1行1項目）</label>
+        <textarea id="draftLeftover" class="edit-area small"></textarea>
+        <div class="check-row">
+          <input type="checkbox" id="draftDeploy">
+          <label for="draftDeploy" style="margin:0;color:var(--text)">GASデプロイ版を更新し確認した</label>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn-secondary" id="draftCancelBtn">破棄</button>
+          <button class="btn-primary" id="draftSaveBtn">この内容で保存</button>
+        </div>
+        <div id="draftMsg" class="msg"></div>
+      </div>
+
       <div id="savedPath" class="saved-path hidden"></div>
       <div id="resultBox" class="result-box"></div>
 
+      <!-- ===== 保存済みノートの修正 ===== -->
       <div id="formattedWrap" class="hidden">
-        <div class="back-link" id="toggleFormatted">📝 Geminiで整えたノートを表示</div>
-        <div id="formattedBox" class="result-box note-content hidden"></div>
+        <div class="back-link" id="toggleFormatted">✏️ 保存したノートを表示・修正</div>
+        <div id="formattedEdit" class="hidden">
+          <textarea id="formattedBox" class="edit-area"></textarea>
+          <button class="btn-primary" id="saveFormattedBtn">ノートの修正を保存</button>
+          <div id="formattedMsg" class="msg"></div>
+        </div>
       </div>
 
       <div id="noteContentWrap" class="hidden">
@@ -401,10 +471,12 @@
   <div class="version" id="versionLabel"></div>
 </div>
 
+<script src="config.js"></script>
 <script>
-const APP_VERSION = 'v2.0 (2026-10-19)';
-// ★★★ ここを、GASをウェブアプリとして公開したときのURLに置き換えてください ★★★
-const GAS_API_URL = 'https://script.google.com/macros/s/AKfycby89KUiJBfEt1yW_BrOqRKhSRhg06y2HFjV9ZPbf5Vp7y8fxiNZsvtjlz3D8V3ohhhf/exec';
+// 画面（GitHub Pages側）のバージョン。GAS側 Code.gs の APP_VERSION と揃えて更新する
+const APP_VERSION = 'v2.2 (2026-10-19)';
+// GASのURLは config.js で設定
+const GAS_API_URL = (window.APP_CONFIG && window.APP_CONFIG.GAS_API_URL) || '';
 
 const $ = (id) => document.getElementById(id);
 
@@ -446,6 +518,7 @@ $('backToLoginFromForgot').addEventListener('click', () => showOnly('loginView')
 // ---------- GAS通信共通関数 ----------
 // GASのCORSプリフライトを避けるため text/plain で送信する
 async function callApi(action, data) {
+  if (!GAS_API_URL) throw new Error('config.js に GAS_API_URL を設定してください。');
   const res = await fetch(GAS_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -841,7 +914,53 @@ $('micBtn').addEventListener('click', () => {
   if (isRecording) stopRecording(); else startRecording();
 });
 
-// ---------- メモ送信 ----------
+// ---------- メモ送信（step1: Geminiで整える → 画面で修正） ----------
+let currentDraft = null;   // { rawText, dailyFolder }
+let savedNoteFileId = null;
+
+const DAILY_ONLY_SUFFIX = '（Dailyに追記のみ・ノートは作らない）';
+
+function linesToArray(v) {
+  return v.split('\n').map((l) => l.replace(/^\s*[-*]\s+/, '').trim()).filter(Boolean);
+}
+
+function fillDraftFolderOptions(selected, dailyFolder, suggested) {
+  const sel = $('draftFolder');
+  sel.innerHTML = '';
+  const src = Array.from($('folderSelect').options).map((o) => o.value).filter(Boolean);
+  if (selected && !src.includes(selected)) src.unshift(selected);
+  if (!src.length) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = '📥 既定フォルダ';
+    sel.appendChild(o);
+  }
+  src.forEach((p) => {
+    const o = document.createElement('option');
+    o.value = p;
+    let label = '📁 ' + p;
+    if (p === dailyFolder) label = '📅 ' + p + DAILY_ONLY_SUFFIX;
+    if (p === suggested) label += ' ← AIのおすすめ';
+    o.textContent = label;
+    sel.appendChild(o);
+  });
+  sel.value = selected || (src[0] || '');
+}
+
+function updateDraftFolderView() {
+  const isDaily = currentDraft && $('draftFolder').value && $('draftFolder').value === currentDraft.dailyFolder;
+  $('draftNoteFields').classList.toggle('hidden', !!isDaily);
+  $('draftFolderHint').textContent = isDaily
+    ? '00_Dailyの各見出しに下の項目だけを追記します。独立したノートにしたい場合はフォルダを変えてください。'
+    : '本文をこのフォルダに新しいノートとして保存し、Dailyの作業ログにリンクを追記します。';
+}
+$('draftFolder').addEventListener('change', updateDraftFolderView);
+
+function hideDraft() {
+  currentDraft = null;
+  $('draftPanel').classList.add('hidden');
+  clearMsg($('draftMsg'));
+}
+
 $('submitBtn').addEventListener('click', async () => {
   if (isRecording) await stopRecordingAndWait();
   const text = $('noteText').value.trim();
@@ -850,61 +969,117 @@ $('submitBtn').addEventListener('click', async () => {
   const token = localStorage.getItem('odp_token');
   if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
 
-  const folder = $('folderSelect').value;
-
   $('submitBtn').disabled = true;
-  $('submitBtn').innerHTML = '<span class="loading"></span>Geminiで整えて保存中...';
+  $('submitBtn').innerHTML = '<span class="loading"></span>Geminiで整えています...';
+  clearMsg(msgEl);
+  hideDraft();
   $('resultBox').style.display = 'none';
   $('savedPath').classList.add('hidden');
   $('formattedWrap').classList.add('hidden');
+  $('noteContentWrap').classList.add('hidden');
 
   try {
-    const result = await callApi('submitNote', { token, text, folder });
-    if (result.ok) {
-      const sn = result.savedNote;
-      if (sn) {
-        setMsg(msgEl, '保存しました：' + sn.folder + '/' + sn.fileName + '（Daily ' + result.fileName + ' にもリンクを追記）', 'success');
-        const how = { ai: '🤖 AIが選択', user: '👆 指定フォルダ', default: '📥 既定フォルダ', root: '📥 ボルト直下' }[sn.decidedBy] || sn.decidedBy;
-        $('savedPath').innerHTML = '';
-        const span = document.createElement('span');
-        span.textContent = '📁 健二保管庫/' + sn.folder + '/' + sn.fileName + '（' + how + '） ';
-        $('savedPath').appendChild(span);
-        if (sn.url) {
-          const a = document.createElement('a');
-          a.href = sn.url; a.target = '_blank'; a.rel = 'noopener';
-          a.textContent = 'Driveで開く';
-          $('savedPath').appendChild(a);
-        }
-        $('savedPath').classList.remove('hidden');
-        $('formattedBox').textContent = sn.content;
-        $('formattedBox').classList.add('hidden');
-        $('formattedBox').style.display = 'none';
-        $('toggleFormatted').textContent = '📝 Geminiで整えたノートを表示';
-        $('formattedWrap').classList.remove('hidden');
-      } else {
-        setMsg(msgEl, result.fileName + ' に追記しました（AI判断：Dailyのみ）。', 'success');
-      }
-      $('resultBox').style.display = 'block';
-      $('resultBox').textContent = result.appended;
-      $('noteText').value = '';
+    const result = await callApi('formatNote', { token, text });
+    if (!result.ok) { setMsg(msgEl, result.error, 'error'); return; }
+    const d = result.draft;
+    currentDraft = { rawText: text, dailyFolder: result.dailyFolder };
 
-      if (result.noteContent) {
-        $('noteContentWrap').classList.remove('hidden');
-        $('noteContentBox').textContent = result.noteContent;
-        $('noteContentBox').classList.add('hidden');
-        $('noteContentBox').style.display = 'none';
-        $('toggleNoteContent').textContent = '📄 保存後のDailyノート全文を表示';
-      } else {
-        $('noteContentWrap').classList.add('hidden');
-      }
-    } else {
-      setMsg(msgEl, result.error, 'error');
-    }
+    // 画面上部で手動指定されたフォルダがあればそれを優先、なければAIの提案
+    const chosen = $('folderSelect').value || result.suggestedFolder || result.defaultFolder || '';
+    fillDraftFolderOptions(chosen, result.dailyFolder, result.suggestedFolder);
+
+    $('draftTitle').value = d.title || '';
+    $('draftBody').value = d.body || '';
+    $('draftTags').value = (d.tags || []).join(', ');
+    $('draftProjects').value = (d.projects || []).join('\n');
+    $('draftWorkLog').value = (d.workLog || []).join('\n');
+    $('draftLeftover').value = (d.leftover || []).join('\n');
+    $('draftDeploy').checked = !!d.deployDone;
+
+    updateDraftFolderView();
+    $('draftPanel').classList.remove('hidden');
+    $('draftPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     setMsg(msgEl, err.message, 'error');
   } finally {
     $('submitBtn').disabled = false;
-    $('submitBtn').textContent = 'Geminiで整えて保存';
+    $('submitBtn').textContent = 'Geminiで整える（確認・修正してから保存）';
+  }
+});
+
+$('draftCancelBtn').addEventListener('click', () => {
+  if (!confirm('Geminiで整えた内容を破棄しますか？（入力欄の元の文章は残ります）')) return;
+  hideDraft();
+});
+
+// ---------- step2: 修正した内容で保存 ----------
+$('draftSaveBtn').addEventListener('click', async () => {
+  if (!currentDraft) return;
+  const token = localStorage.getItem('odp_token');
+  const msgEl = $('draftMsg');
+  if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
+
+  const draft = {
+    title: $('draftTitle').value.trim(),
+    body: $('draftBody').value,
+    tags: $('draftTags').value.split(/[,、]/).map((t) => t.trim()).filter(Boolean),
+    projects: linesToArray($('draftProjects').value),
+    workLog: linesToArray($('draftWorkLog').value),
+    leftover: linesToArray($('draftLeftover').value),
+    deployDone: $('draftDeploy').checked
+  };
+  const folder = $('draftFolder').value;
+
+  $('draftSaveBtn').disabled = true;
+  $('draftSaveBtn').innerHTML = '<span class="loading"></span>保存中...';
+  try {
+    const result = await callApi('saveNote', { token, draft, folder, rawText: currentDraft.rawText });
+    if (!result.ok) { setMsg(msgEl, result.error, 'error'); return; }
+
+    const sn = result.savedNote;
+    const postMsg = $('postMsg');
+    if (sn) {
+      setMsg(postMsg, '保存しました：' + sn.folder + '/' + sn.fileName + '（Daily ' + result.fileName + ' にもリンクを追記）', 'success');
+      $('savedPath').innerHTML = '';
+      const span = document.createElement('span');
+      span.textContent = '📁 健二保管庫/' + sn.folder + '/' + sn.fileName + ' ';
+      $('savedPath').appendChild(span);
+      if (sn.url) {
+        const a = document.createElement('a');
+        a.href = sn.url; a.target = '_blank'; a.rel = 'noopener';
+        a.textContent = 'Driveで開く';
+        $('savedPath').appendChild(a);
+      }
+      $('savedPath').classList.remove('hidden');
+
+      savedNoteFileId = sn.fileId;
+      $('formattedBox').value = sn.content;
+      $('formattedEdit').classList.add('hidden');
+      $('toggleFormatted').textContent = '✏️ 保存したノートを表示・修正';
+      clearMsg($('formattedMsg'));
+      $('formattedWrap').classList.remove('hidden');
+    } else {
+      setMsg(postMsg, result.fileName + ' に追記しました。', 'success');
+      savedNoteFileId = null;
+    }
+    $('resultBox').style.display = 'block';
+    $('resultBox').textContent = result.appended;
+    $('noteText').value = '';
+    hideDraft();
+
+    if (result.noteContent) {
+      $('noteContentWrap').classList.remove('hidden');
+      $('noteContentBox').textContent = result.noteContent;
+      $('noteContentBox').classList.add('hidden');
+      $('noteContentBox').style.display = 'none';
+      $('toggleNoteContent').textContent = '📄 保存後のDailyノート全文を表示';
+    }
+    postMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('draftSaveBtn').disabled = false;
+    $('draftSaveBtn').textContent = 'この内容で保存';
   }
 });
 
@@ -918,14 +1093,34 @@ $('toggleNoteContent').addEventListener('click', () => {
     : '📄 保存後のDailyノート全文を表示';
 });
 
+// ---------- 保存済みノートの修正 ----------
 $('toggleFormatted').addEventListener('click', () => {
-  const box = $('formattedBox');
+  const box = $('formattedEdit');
   const isHidden = box.classList.contains('hidden');
   box.classList.toggle('hidden');
-  box.style.display = isHidden ? 'block' : 'none';
   $('toggleFormatted').textContent = isHidden
-    ? '📝 Geminiで整えたノートを隠す'
-    : '📝 Geminiで整えたノートを表示';
+    ? '✏️ 保存したノートを閉じる'
+    : '✏️ 保存したノートを表示・修正';
+});
+
+$('saveFormattedBtn').addEventListener('click', async () => {
+  const token = localStorage.getItem('odp_token');
+  const msgEl = $('formattedMsg');
+  if (!savedNoteFileId) { setMsg(msgEl, '修正できるノートがありません。', 'error'); return; }
+  if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
+  $('saveFormattedBtn').disabled = true;
+  try {
+    const result = await callApi('updateSavedNote', { token, fileId: savedNoteFileId, content: $('formattedBox').value });
+    if (result.ok) {
+      setMsg(msgEl, result.fileName + ' を上書き保存しました。', 'success');
+    } else {
+      setMsg(msgEl, result.error, 'error');
+    }
+  } catch (err) {
+    setMsg(msgEl, err.message, 'error');
+  } finally {
+    $('saveFormattedBtn').disabled = false;
+  }
 });
 
 // ---------- 指定日のノート表示 ----------
@@ -1023,9 +1218,48 @@ $('deleteLookupNoteBtn').addEventListener('click', async () => {
   }
 });
 
+// ---------- バージョン情報表示 ----------
+function renderVersion(gasVersion, error) {
+  const el = $('versionLabel');
+  el.innerHTML = '';
+  const line1 = document.createElement('div');
+  line1.textContent = '画面: ' + APP_VERSION;
+  const line2 = document.createElement('div');
+  if (!GAS_API_URL) {
+    line2.className = 'warn';
+    line2.textContent = 'GAS: config.js に GAS_API_URL が設定されていません';
+  } else if (error) {
+    line2.className = 'warn';
+    line2.textContent = 'GAS: 接続できません（' + error + '）';
+  } else if (!gasVersion) {
+    line2.textContent = 'GAS: 確認中…';
+  } else if (gasVersion === APP_VERSION) {
+    line2.className = 'ok';
+    line2.textContent = 'GAS: ' + gasVersion + ' ✓';
+  } else {
+    line2.className = 'warn';
+    line2.textContent = 'GAS: ' + gasVersion + '（画面と不一致：GASの再デプロイを確認してください）';
+  }
+  el.appendChild(line1);
+  el.appendChild(line2);
+}
+
+async function checkGasVersion() {
+  if (!GAS_API_URL) { renderVersion(null); return; }
+  try {
+    const res = await fetch(GAS_API_URL, { method: 'GET' });
+    const json = await res.json();
+    renderVersion(json.version || '不明（旧バージョン）');
+  } catch (err) {
+    renderVersion(null, err.message);
+  }
+}
+
 // ---------- 起動時にセッション確認 ----------
 (function init() {
-  $('versionLabel').textContent = APP_VERSION;
+  document.querySelectorAll('.app-ver').forEach((el) => { el.textContent = APP_VERSION.split(' ')[0]; });
+  renderVersion(null);
+  checkGasVersion();
   const token = localStorage.getItem('odp_token');
   const nickname = localStorage.getItem('odp_nickname');
   const email = localStorage.getItem('odp_email');
