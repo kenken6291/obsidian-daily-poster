@@ -204,6 +204,33 @@
     border: 1px solid #3b3d5c;
     border-radius: 10px;
   }
+  select {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #3b3d5c;
+    background: #1f2135;
+    color: var(--text);
+    font-size: 0.95rem;
+    color-scheme: dark;
+  }
+  .row-label { display: flex; justify-content: space-between; align-items: flex-end; }
+  .mini-link { font-size: 0.75rem; color: var(--accent); cursor: pointer; margin: 12px 0 4px; }
+  .mic-status {
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 6px;
+    min-height: 1.2em;
+  }
+  .mic-status.listening { color: var(--success); }
+  .saved-path {
+    font-size: 0.8rem;
+    margin-top: 10px;
+    word-break: break-all;
+  }
+  .saved-path a { color: var(--accent); }
+  .version { text-align: center; font-size: 0.7rem; color: var(--muted); margin-top: 18px; }
   .back-link {
     display: inline-block;
     margin-top: 10px;
@@ -220,7 +247,7 @@
   <!-- ===== ログイン画面 ===== -->
   <div id="loginView">
     <h1>Obsidian Daily Poster</h1>
-    <p class="subtitle">音声・テキストで00_Dailyに直接メモを追記</p>
+    <p class="subtitle">音声・テキストをGeminiで整えて健二保管庫に保存</p>
 
     <label>メールアドレス</label>
     <input type="email" id="loginEmail" placeholder="you@example.com">
@@ -328,17 +355,32 @@
 
     <div id="mainPostArea">
       <button class="btn-mic" id="micBtn">🎙️ 音声入力を開始</button>
+      <div class="mic-status" id="micStatus"></div>
 
       <label>内容（音声認識の結果を修正できます）</label>
       <textarea id="noteText" placeholder="思いついたタスクやメモを話すか、入力してください"></textarea>
 
-      <button class="btn-primary" id="submitBtn">Dailyノートに追記</button>
+      <div class="row-label">
+        <label>保存先フォルダ（健二保管庫）</label>
+        <span class="mini-link" id="refreshFoldersBtn">🔄 一覧更新</span>
+      </div>
+      <select id="folderSelect">
+        <option value="">🤖 AIにおまかせ</option>
+      </select>
+
+      <button class="btn-primary" id="submitBtn">Geminiで整えて保存</button>
 
       <div id="postMsg" class="msg"></div>
+      <div id="savedPath" class="saved-path hidden"></div>
       <div id="resultBox" class="result-box"></div>
 
+      <div id="formattedWrap" class="hidden">
+        <div class="back-link" id="toggleFormatted">📝 Geminiで整えたノートを表示</div>
+        <div id="formattedBox" class="result-box note-content hidden"></div>
+      </div>
+
       <div id="noteContentWrap" class="hidden">
-        <div class="back-link" id="toggleNoteContent">📄 保存後のノート全文を表示</div>
+        <div class="back-link" id="toggleNoteContent">📄 保存後のDailyノート全文を表示</div>
         <div id="noteContentBox" class="result-box note-content hidden"></div>
       </div>
 
@@ -356,9 +398,11 @@
     </div>
   </div>
 
+  <div class="version" id="versionLabel"></div>
 </div>
 
 <script>
+const APP_VERSION = 'v2.0 (2026-10-19)';
 // ★★★ ここを、GASをウェブアプリとして公開したときのURLに置き換えてください ★★★
 const GAS_API_URL = 'https://script.google.com/macros/s/AKfycby89KUiJBfEt1yW_BrOqRKhSRhg06y2HFjV9ZPbf5Vp7y8fxiNZsvtjlz3D8V3ohhhf/exec';
 
@@ -515,6 +559,7 @@ $('logoutBtn').addEventListener('click', () => {
   localStorage.removeItem('odp_token');
   localStorage.removeItem('odp_email');
   localStorage.removeItem('odp_nickname');
+  if (isRecording) stopRecording();
   showOnly('loginView');
 });
 
@@ -531,7 +576,39 @@ function enterPostView(nickname) {
   const tzOffsetMs = now.getTimezoneOffset() * 60000;
   const localIso = new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
   $('lookupDate').value = localIso;
+
+  loadFolders(false);
 }
+
+// ---------- 保存先フォルダ一覧 ----------
+async function loadFolders(refresh) {
+  const token = localStorage.getItem('odp_token');
+  if (!token) return;
+  const sel = $('folderSelect');
+  const current = sel.value || localStorage.getItem('odp_folder') || '';
+  $('refreshFoldersBtn').textContent = '⏳ 読込中...';
+  try {
+    const result = await callApi('listFolders', { token, refresh: !!refresh });
+    if (result.ok) {
+      sel.innerHTML = '<option value="">🤖 AIにおまかせ</option>';
+      result.folders.forEach((p) => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = '📁 ' + p;
+        sel.appendChild(opt);
+      });
+      sel.value = result.folders.includes(current) ? current : '';
+    } else if (/セッション/.test(result.error || '')) {
+      setMsg($('postMsg'), result.error, 'error');
+    }
+  } catch (err) {
+    // 一覧取得に失敗しても「AIにおまかせ」で投稿は可能
+  } finally {
+    $('refreshFoldersBtn').textContent = '🔄 一覧更新';
+  }
+}
+$('refreshFoldersBtn').addEventListener('click', () => loadFolders(true));
+$('folderSelect').addEventListener('change', () => localStorage.setItem('odp_folder', $('folderSelect').value));
 
 // ---------- ニックネーム編集 ----------
 $('editNicknameBtn').addEventListener('click', () => {
@@ -612,9 +689,56 @@ $('savePwBtn').addEventListener('click', async () => {
   }
 });
 
-// ---------- 音声入力 ----------
+// ---------- 音声入力（話の間を待つ方式） ----------
+// ・無音で認識が途切れても、停止ボタンを押すまで自動で再開し続ける
+// ・途切れるたびに確定済みテキストを保存するので、間をあけても前の内容は消えない
+// ・Android Chrome は continuous モードで結果が重複するため、短い区切りで再開する方式にする
 let recognition = null;
 let isRecording = false;
+let committedText = '';   // これまでに確定した文
+let sessionFinal = '';    // 現在の認識セッションで確定した文
+let restartTimer = null;
+let statusTimer = null;
+let lastSpeechAt = 0;
+let wakeLock = null;
+let endWaiters = [];
+const isAndroid = /Android/i.test(navigator.userAgent);
+const FATAL_ERRORS = ['not-allowed', 'service-not-allowed', 'audio-capture', 'language-not-supported'];
+
+function joinText(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if (/[\s。、！？!?]$/.test(a)) return a + b;
+  return a + ' ' + b;
+}
+
+function setMicStatus(text, listening) {
+  $('micStatus').textContent = text;
+  $('micStatus').classList.toggle('listening', !!listening);
+}
+
+function updateWaitingStatus() {
+  if (!isRecording) return;
+  const sec = Math.floor((Date.now() - lastSpeechAt) / 1000);
+  if (sec < 2) {
+    setMicStatus('🎧 聞き取り中…', true);
+  } else {
+    setMicStatus('⏸ 続きを待っています（' + sec + '秒）… 終わったら停止を押してください', false);
+  }
+}
+
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+  } catch (e) { wakeLock = null; }
+}
+function releaseWakeLock() {
+  try { if (wakeLock) wakeLock.release(); } catch (e) { /* noop */ }
+  wakeLock = null;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && isRecording) requestWakeLock();
+});
 
 function setupSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -626,39 +750,54 @@ function setupSpeechRecognition() {
   recognition = new SpeechRecognition();
   recognition.lang = 'ja-JP';
   recognition.interimResults = true;
-  recognition.continuous = true;
-
-  let baseText = '';
+  recognition.continuous = !isAndroid;
+  recognition.maxAlternatives = 1;
 
   recognition.onstart = () => {
-    baseText = $('noteText').value;
-    if (baseText && !baseText.endsWith(' ') && !baseText.endsWith('\n')) baseText += ' ';
+    // 認識の合間に手で修正された内容も取り込む
+    committedText = $('noteText').value;
+    sessionFinal = '';
   };
 
   recognition.onresult = (event) => {
+    let fin = '';
     let interim = '';
-    let final = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        final += transcript;
-      } else {
-        interim += transcript;
-      }
+    // 毎回セッション全体から組み立て直す（重複防止）
+    for (let i = 0; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) fin += t; else interim += t;
     }
-    if (final) baseText += final;
-    $('noteText').value = baseText + interim;
+    sessionFinal = fin;
+    lastSpeechAt = Date.now();
+    $('noteText').value = joinText(committedText, fin + interim);
+    $('noteText').scrollTop = $('noteText').scrollHeight;
+    updateWaitingStatus();
   };
 
   recognition.onerror = (event) => {
-    setMsg($('postMsg'), '音声認識エラー: ' + event.error, 'error');
-    stopRecording();
+    if (FATAL_ERRORS.includes(event.error)) {
+      setMsg($('postMsg'), '音声認識エラー: ' + event.error + '（マイクの許可を確認してください）', 'error');
+      stopRecording();
+    }
+    // no-speech / aborted / network などは onend で自動再開する
   };
 
   recognition.onend = () => {
+    // このセッションで確定した分を保存
+    committedText = joinText(committedText, sessionFinal);
+    sessionFinal = '';
+    $('noteText').value = committedText;
+
     if (isRecording) {
-      // 継続モードが途切れた場合は再開する
-      try { recognition.start(); } catch (e) { stopRecording(); }
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        if (!isRecording) return;
+        try { recognition.start(); } catch (e) { /* 既に開始済み */ }
+      }, 250);
+    } else {
+      const waiters = endWaiters;
+      endWaiters = [];
+      waiters.forEach((fn) => fn());
     }
   };
 }
@@ -666,39 +805,85 @@ setupSpeechRecognition();
 
 function startRecording() {
   if (!recognition) return;
+  clearMsg($('postMsg'));
   isRecording = true;
-  recognition.start();
+  lastSpeechAt = Date.now();
+  try { recognition.start(); } catch (e) { /* 既に開始済み */ }
+  requestWakeLock();
   $('micBtn').textContent = '⏹️ 音声入力を停止';
   $('micBtn').classList.add('recording');
+  clearInterval(statusTimer);
+  statusTimer = setInterval(updateWaitingStatus, 1000);
+  setMicStatus('🎧 聞き取り中…', true);
 }
+
 function stopRecording() {
   isRecording = false;
-  if (recognition) recognition.stop();
+  clearTimeout(restartTimer);
+  clearInterval(statusTimer);
+  releaseWakeLock();
+  try { if (recognition) recognition.stop(); } catch (e) { /* noop */ }
   $('micBtn').textContent = '🎙️ 音声入力を開始';
   $('micBtn').classList.remove('recording');
+  setMicStatus('', false);
 }
+
+// 停止して、最後の確定結果が反映されるまで少し待つ
+function stopRecordingAndWait() {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 1500);
+    endWaiters.push(() => { clearTimeout(timer); resolve(); });
+    stopRecording();
+  });
+}
+
 $('micBtn').addEventListener('click', () => {
   if (isRecording) stopRecording(); else startRecording();
 });
 
 // ---------- メモ送信 ----------
 $('submitBtn').addEventListener('click', async () => {
+  if (isRecording) await stopRecordingAndWait();
   const text = $('noteText').value.trim();
   const msgEl = $('postMsg');
   if (!text) { setMsg(msgEl, '内容を入力するか、音声で話してください。', 'error'); return; }
   const token = localStorage.getItem('odp_token');
   if (!token) { setMsg(msgEl, 'セッションが切れています。再ログインしてください。', 'error'); return; }
 
-  if (isRecording) stopRecording();
+  const folder = $('folderSelect').value;
 
   $('submitBtn').disabled = true;
-  $('submitBtn').innerHTML = '<span class="loading"></span>Geminiで整形して追記中...';
+  $('submitBtn').innerHTML = '<span class="loading"></span>Geminiで整えて保存中...';
   $('resultBox').style.display = 'none';
+  $('savedPath').classList.add('hidden');
+  $('formattedWrap').classList.add('hidden');
 
   try {
-    const result = await callApi('submitNote', { token, text });
+    const result = await callApi('submitNote', { token, text, folder });
     if (result.ok) {
-      setMsg(msgEl, result.fileName + ' に追記しました。', 'success');
+      const sn = result.savedNote;
+      if (sn) {
+        setMsg(msgEl, '保存しました：' + sn.folder + '/' + sn.fileName + '（Daily ' + result.fileName + ' にもリンクを追記）', 'success');
+        const how = { ai: '🤖 AIが選択', user: '👆 指定フォルダ', default: '📥 既定フォルダ', root: '📥 ボルト直下' }[sn.decidedBy] || sn.decidedBy;
+        $('savedPath').innerHTML = '';
+        const span = document.createElement('span');
+        span.textContent = '📁 健二保管庫/' + sn.folder + '/' + sn.fileName + '（' + how + '） ';
+        $('savedPath').appendChild(span);
+        if (sn.url) {
+          const a = document.createElement('a');
+          a.href = sn.url; a.target = '_blank'; a.rel = 'noopener';
+          a.textContent = 'Driveで開く';
+          $('savedPath').appendChild(a);
+        }
+        $('savedPath').classList.remove('hidden');
+        $('formattedBox').textContent = sn.content;
+        $('formattedBox').classList.add('hidden');
+        $('formattedBox').style.display = 'none';
+        $('toggleFormatted').textContent = '📝 Geminiで整えたノートを表示';
+        $('formattedWrap').classList.remove('hidden');
+      } else {
+        setMsg(msgEl, result.fileName + ' に追記しました（AI判断：Dailyのみ）。', 'success');
+      }
       $('resultBox').style.display = 'block';
       $('resultBox').textContent = result.appended;
       $('noteText').value = '';
@@ -708,7 +893,7 @@ $('submitBtn').addEventListener('click', async () => {
         $('noteContentBox').textContent = result.noteContent;
         $('noteContentBox').classList.add('hidden');
         $('noteContentBox').style.display = 'none';
-        $('toggleNoteContent').textContent = '📄 保存後のノート全文を表示';
+        $('toggleNoteContent').textContent = '📄 保存後のDailyノート全文を表示';
       } else {
         $('noteContentWrap').classList.add('hidden');
       }
@@ -719,7 +904,7 @@ $('submitBtn').addEventListener('click', async () => {
     setMsg(msgEl, err.message, 'error');
   } finally {
     $('submitBtn').disabled = false;
-    $('submitBtn').textContent = 'Dailyノートに追記';
+    $('submitBtn').textContent = 'Geminiで整えて保存';
   }
 });
 
@@ -729,8 +914,18 @@ $('toggleNoteContent').addEventListener('click', () => {
   box.classList.toggle('hidden');
   box.style.display = isHidden ? 'block' : 'none';
   $('toggleNoteContent').textContent = isHidden
-    ? '📄 保存後のノート全文を隠す'
-    : '📄 保存後のノート全文を表示';
+    ? '📄 保存後のDailyノート全文を隠す'
+    : '📄 保存後のDailyノート全文を表示';
+});
+
+$('toggleFormatted').addEventListener('click', () => {
+  const box = $('formattedBox');
+  const isHidden = box.classList.contains('hidden');
+  box.classList.toggle('hidden');
+  box.style.display = isHidden ? 'block' : 'none';
+  $('toggleFormatted').textContent = isHidden
+    ? '📝 Geminiで整えたノートを隠す'
+    : '📝 Geminiで整えたノートを表示';
 });
 
 // ---------- 指定日のノート表示 ----------
@@ -830,6 +1025,7 @@ $('deleteLookupNoteBtn').addEventListener('click', async () => {
 
 // ---------- 起動時にセッション確認 ----------
 (function init() {
+  $('versionLabel').textContent = APP_VERSION;
   const token = localStorage.getItem('odp_token');
   const nickname = localStorage.getItem('odp_nickname');
   const email = localStorage.getItem('odp_email');
