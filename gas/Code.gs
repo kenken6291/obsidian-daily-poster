@@ -16,9 +16,12 @@
  *   DAILY_FOLDER_ID      : Obsidian ボルト内「00_Daily」フォルダの Google ドライブ フォルダID
  *   USER_SHEET_ID        : ユーザー管理用スプレッドシートのID（未設定なら初回実行時に自動作成）
  *   VAULT_FOLDER_ID      : （任意）ボルト「健二保管庫」ルートのフォルダID。未設定なら 00_Daily の親フォルダを自動採用
- *   GEMINI_MODEL         : （任意）Geminiモデル名。未設定なら gemini-3.6-flash
+ *   GEMINI_MODEL         : （任意）既定のGeminiモデル名。未設定なら汎用の最新モデル（FALLBACK_GEMINI_MODELS）
  *   DEFAULT_NOTE_FOLDER  : （任意）AIが保存先を決められなかった時のフォルダ（ボルト内パス）。未設定なら 10_free_memo
  *
+ * 【v2.5 追加】Geminiモデル選択（自動モード／4 Hydrogen／4 Neon／4 Carbon／4 Argon／3.8 Flash／3.5 Flash）。
+ *   モデルの決定順: ①画面で選んだモデル ②スクリプトプロパティ GEMINI_MODEL ③汎用の最新モデル。
+ *   指定モデルに該当がない（廃止・未公開・名前違い）場合は、汎用の最新モデルへ自動で切り替えて再実行する。
  * 【v2.4 変更】Dailyテンプレートから「## デプロイ確認」セクションを削除（既存ノートの同セクションも追記時に除去）。
  * 【v2.3 追加】投稿履歴（Postsシート）の一覧表示（新しい順/古い順）、対応済みチェックで一覧から外す。
  * 【v2.2 変更】GAS URL を config.js に分離、画面・GASのバージョン表示（不一致警告）。
@@ -39,7 +42,7 @@ function getConfig_() {
     DAILY_FOLDER_ID: props.getProperty('DAILY_FOLDER_ID'),
     USER_SHEET_ID: props.getProperty('USER_SHEET_ID'),
     VAULT_FOLDER_ID: props.getProperty('VAULT_FOLDER_ID'),
-    GEMINI_MODEL: props.getProperty('GEMINI_MODEL') || 'gemini-3.6-flash',
+    GEMINI_MODEL: props.getProperty('GEMINI_MODEL') || '',
     DEFAULT_NOTE_FOLDER: props.getProperty('DEFAULT_NOTE_FOLDER') || '10_free_memo'
   };
 }
@@ -54,7 +57,16 @@ var HEADING_DEPLOY_OLD = '## デプロイ確認';
 var HEADING_LEFTOVER = '## 明日への積み残し';
 
 // 画面側 index.html の APP_VERSION と揃えて更新する（不一致だと画面下に警告表示）
-var APP_VERSION = 'v2.4 (2026-10-19)';
+var APP_VERSION = 'v2.5 (2026-11-19)';
+
+// 指定なし・該当なしの時に使う汎用最新モデル（先頭から順に試す）
+//   gemini-flash-latest : Googleが常に最新の汎用モデルへ自動で差し替えるエイリアス
+//   gemini-4-hydrogen   : 2026年11月時点の汎用最新モデル（「日々の暮らしをサポート」）
+//   gemini-3.8-flash    : 最終的な保険
+var FALLBACK_GEMINI_MODELS = ['gemini-flash-latest', 'gemini-4-hydrogen', 'gemini-3.8-flash'];
+var GEMINI_MODEL_PATTERN = /^gemini-[a-z0-9][a-z0-9.\-]{0,60}$/;
+var GEMINI_RETRY_CODES = [429, 500, 503];
+var GEMINI_MAX_ATTEMPTS = 3;
 var FOLDER_CACHE_KEY = 'vault_folders_v2';
 var FOLDER_CACHE_SEC = 10 * 60;   // フォルダ一覧のキャッシュ 10分
 var FOLDER_MAX_DEPTH = 3;         // ボルト内を何階層まで候補にするか
@@ -64,7 +76,13 @@ var FOLDER_MAX_COUNT = 300;
 
 function doGet(e) {
   return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, message: 'Obsidian Daily Poster API is running.', version: APP_VERSION }))
+    .createTextOutput(JSON.stringify({
+      ok: true,
+      message: 'Obsidian Daily Poster API is running.',
+      version: APP_VERSION,
+      defaultModel: resolveGeminiModel_(''),
+      fallbackModels: FALLBACK_GEMINI_MODELS
+    }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -388,7 +406,11 @@ function handleFormatNote_(body) {
   }
   var config = getConfig_();
   var folders = listVaultFolders_(false);
-  var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }));
+  var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }), body.model);
+  var usedModel = structured._model;
+  var requestedModel = structured._requestedModel;
+  delete structured._model;
+  delete structured._requestedModel;
 
   var suggested = findFolderByPath_(folders, structured.folder);
   var dailyPath = '';
@@ -400,7 +422,9 @@ function handleFormatNote_(body) {
     draft: structured,
     suggestedFolder: suggested ? suggested.path : '',
     dailyFolder: dailyPath,
-    defaultFolder: config.DEFAULT_NOTE_FOLDER
+    defaultFolder: config.DEFAULT_NOTE_FOLDER,
+    model: usedModel,
+    requestedModel: requestedModel
   };
 }
 
@@ -443,7 +467,9 @@ function handleSubmitNote_(body) {
     return { ok: false, error: 'テキストが空です。' };
   }
   var folders = listVaultFolders_(false);
-  var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }));
+  var structured = structureWithGeminiTemplate_(rawText, folders.map(function (f) { return f.path; }), body.model);
+  delete structured._model;
+  delete structured._requestedModel;
   return saveDraft_(structured, rawText, (body.folder || '').trim() || structured.folder, email);
 }
 
@@ -895,7 +921,7 @@ function handleDeleteNoteByDate_(body) {
  * Geminiに ①入力を読みやすいMarkdownノートに整形 ②保存先フォルダ選択
  * ③Dailyテンプレート4区分への分類 をまとめて行わせ、JSONで受け取る。
  */
-function structureWithGeminiTemplate_(rawText, folderPaths) {
+function structureWithGeminiTemplate_(rawText, folderPaths, requestedModel) {
   var config = getConfig_();
   if (!config.GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY が設定されていません。');
@@ -925,26 +951,28 @@ function structureWithGeminiTemplate_(rawText, folderPaths) {
     '}\n\n' +
     '該当がない配列は [] にする。分類に迷う内容は "workLog" に入れる。projects/workLog/leftover は簡潔な体言止め・常体で。';
 
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + config.GEMINI_MODEL +
-    ':generateContent?key=' + config.GEMINI_API_KEY;
   var payload = {
     contents: [
       { role: 'user', parts: [{ text: systemPrompt + '\n\n【入力】\n' + rawText }] }
     ],
     generationConfig: { responseMimeType: 'application/json', temperature: 0.3 }
   };
-  var options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-  var res = UrlFetchApp.fetch(url, options);
-  var code = res.getResponseCode();
-  if (code !== 200) {
-    throw new Error('Gemini API エラー (' + code + '): ' + res.getContentText());
+
+  // 指定モデル → 汎用の最新モデル（順番に）で、該当があるまで試す
+  var firstModel = resolveGeminiModel_(requestedModel);
+  var candidates = [firstModel].concat(FALLBACK_GEMINI_MODELS.filter(function (m) { return m !== firstModel; }));
+  var usedModel = firstModel;
+  var res = null;
+  for (var ci = 0; ci < candidates.length; ci++) {
+    usedModel = candidates[ci];
+    res = callGeminiModel_(usedModel, config.GEMINI_API_KEY, payload);
+    if (!isModelNotFound_(res.code, res.text)) break;
+    console.warn('Geminiモデル「' + usedModel + '」に該当がないため次の候補に切り替えます');
   }
-  var json = JSON.parse(res.getContentText());
+  if (res.code !== 200) {
+    throw new Error('Gemini API エラー (' + res.code + ', ' + usedModel + '): ' + res.text.substring(0, 300));
+  }
+  var json = JSON.parse(res.text);
   var text = json.candidates &&
     json.candidates[0] &&
     json.candidates[0].content &&
@@ -975,8 +1003,60 @@ function structureWithGeminiTemplate_(rawText, folderPaths) {
     folder: String(parsed.folder || '').trim(),
     projects: arr(parsed.projects),
     workLog: arr(parsed.workLog),
-    leftover: arr(parsed.leftover)
+    leftover: arr(parsed.leftover),
+    _model: usedModel,
+    _requestedModel: firstModel
   };
+}
+
+// ==================== Geminiモデル決定・呼び出し ====================
+
+/**
+ * 使用するGeminiモデル名を決定する。
+ * 画面指定 → スクリプトプロパティ GEMINI_MODEL → 汎用の最新モデル の順。不正な名前は無視する。
+ */
+function resolveGeminiModel_(requested) {
+  var req = String(requested || '').trim().toLowerCase();
+  if (req && GEMINI_MODEL_PATTERN.test(req)) return req;
+
+  var prop = String(getConfig_().GEMINI_MODEL || '').trim().toLowerCase();
+  if (prop && GEMINI_MODEL_PATTERN.test(prop)) return prop;
+
+  return FALLBACK_GEMINI_MODELS[0];
+}
+
+/**
+ * Gemini APIを1モデルに対して呼び出す。混雑(429/500/503)時は待ち時間を伸ばしながら再試行する。
+ */
+function callGeminiModel_(model, apiKey, payload) {
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-goog-api-key': apiKey },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  var code = 0;
+  var text = '';
+  for (var attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt++) {
+    var res = UrlFetchApp.fetch(url, options);
+    code = res.getResponseCode();
+    text = res.getContentText();
+    if (code === 200) break;
+    if (GEMINI_RETRY_CODES.indexOf(code) === -1 || attempt === GEMINI_MAX_ATTEMPTS) break;
+    Utilities.sleep(2000 * attempt);
+  }
+  return { code: code, text: text };
+}
+
+/** モデルが存在しない（廃止・名前違い）ことを示す応答かどうか。 */
+function isModelNotFound_(code, text) {
+  if (code === 404) return true;
+  if (code === 400) {
+    return /not found|is not supported|NOT_FOUND|unknown model|invalid model/i.test(text);
+  }
+  return false;
 }
 
 /**

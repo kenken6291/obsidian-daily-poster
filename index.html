@@ -269,6 +269,7 @@
   .version { text-align: center; font-size: 0.7rem; color: var(--muted); margin-top: 18px; line-height: 1.6; }
   .version .warn { color: var(--danger); }
   .version .ok { color: var(--success); }
+  .model-hint { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
   .ver-badge {
     display: inline-block;
     font-size: 0.68rem;
@@ -417,6 +418,10 @@
         <option value="">🤖 AIにおまかせ</option>
       </select>
 
+      <label for="modelSelect">整形に使うAIモデル（Gemini）</label>
+      <select id="modelSelect"></select>
+      <div class="model-hint">選んだモデルが使えない時は、汎用の最新モデルに自動で切り替わります</div>
+
       <button class="btn-primary" id="submitBtn">Geminiで整える（確認・修正してから保存）</button>
 
       <div id="postMsg" class="msg"></div>
@@ -425,6 +430,7 @@
       <div id="draftPanel" class="inline-panel draft-panel hidden">
         <h2>📝 Geminiで整えた内容を確認・修正</h2>
         <div class="hint">自由に書き換えてから「この内容で保存」を押してください。</div>
+        <div class="hint" id="draftModelHint"></div>
 
         <label>保存先フォルダ</label>
         <select id="draftFolder"></select>
@@ -512,9 +518,16 @@
 <script src="config.js"></script>
 <script>
 // 画面（GitHub Pages側）のバージョン。GAS側 Code.gs の APP_VERSION と揃えて更新する
-const APP_VERSION = 'v2.4 (2026-10-19)';
-// GASのURLは config.js で設定
-const GAS_API_URL = (window.APP_CONFIG && window.APP_CONFIG.GAS_API_URL) || '';
+const APP_VERSION = 'v2.5 (2026-11-19)';
+// GASのURL・Geminiモデルの選択肢は config.js で設定
+const APP_CONFIG = window.APP_CONFIG || {};
+const GAS_API_URL = APP_CONFIG.GAS_API_URL || '';
+const GEMINI_MODEL_OPTIONS = Array.isArray(APP_CONFIG.GEMINI_MODEL_OPTIONS) && APP_CONFIG.GEMINI_MODEL_OPTIONS.length
+  ? APP_CONFIG.GEMINI_MODEL_OPTIONS
+  : [{ value: '', label: '自動モード（汎用の最新）' }];
+const MODEL_KEY = 'odp_gemini_model';
+let GEMINI_MODEL = APP_CONFIG.GEMINI_MODEL || '';
+let serverDefaultModel = '';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1020,7 +1033,7 @@ $('submitBtn').addEventListener('click', async () => {
   $('noteContentWrap').classList.add('hidden');
 
   try {
-    const result = await callApi('formatNote', { token, text });
+    const result = await callApi('formatNote', { token, text, model: GEMINI_MODEL });
     if (!result.ok) { setMsg(msgEl, result.error, 'error'); return; }
     const d = result.draft;
     currentDraft = { rawText: text, dailyFolder: result.dailyFolder };
@@ -1035,6 +1048,14 @@ $('submitBtn').addEventListener('click', async () => {
     $('draftProjects').value = (d.projects || []).join('\n');
     $('draftWorkLog').value = (d.workLog || []).join('\n');
     $('draftLeftover').value = (d.leftover || []).join('\n');
+
+    if (result.model) {
+      $('draftModelHint').textContent = '使用モデル: ' + (result.requestedModel && result.requestedModel !== result.model
+        ? result.model + '（' + result.requestedModel + ' が使えなかったため自動で切替）'
+        : result.model);
+    } else {
+      $('draftModelHint').textContent = '';
+    }
 
     updateDraftFolderView();
     $('draftPanel').classList.remove('hidden');
@@ -1418,6 +1439,41 @@ $('deleteLookupNoteBtn').addEventListener('click', async () => {
   }
 });
 
+// ---------- AIモデル選択 ----------
+function modelLabel(value) {
+  const opt = GEMINI_MODEL_OPTIONS.find((o) => o.value === value);
+  return opt ? opt.label : (value || '自動モード（汎用の最新）');
+}
+
+function setupModelPicker() {
+  let saved = null;
+  try { saved = localStorage.getItem(MODEL_KEY); } catch (e) { /* ignore */ }
+  if (saved !== null && GEMINI_MODEL_OPTIONS.some((o) => o.value === saved)) GEMINI_MODEL = saved;
+
+  const sel = $('modelSelect');
+  sel.innerHTML = '';
+  GEMINI_MODEL_OPTIONS.forEach((o) => {
+    const op = document.createElement('option');
+    op.value = o.value;
+    op.textContent = o.label;
+    sel.appendChild(op);
+  });
+  sel.value = GEMINI_MODEL;
+  sel.addEventListener('change', () => {
+    GEMINI_MODEL = sel.value;
+    try { localStorage.setItem(MODEL_KEY, GEMINI_MODEL); } catch (e) { /* ignore */ }
+    renderModelLine();
+  });
+}
+
+function renderModelLine() {
+  const el = $('versionModel');
+  if (!el) return;
+  let text = 'AIモデル: ' + modelLabel(GEMINI_MODEL);
+  if (!GEMINI_MODEL && serverDefaultModel) text += '（現在: ' + serverDefaultModel + '）';
+  el.textContent = text;
+}
+
 // ---------- バージョン情報表示 ----------
 function renderVersion(gasVersion, error) {
   const el = $('versionLabel');
@@ -1440,8 +1496,12 @@ function renderVersion(gasVersion, error) {
     line2.className = 'warn';
     line2.textContent = 'GAS: ' + gasVersion + '（画面と不一致：GASの再デプロイを確認してください）';
   }
+  const line3 = document.createElement('div');
+  line3.id = 'versionModel';
   el.appendChild(line1);
   el.appendChild(line2);
+  el.appendChild(line3);
+  renderModelLine();
 }
 
 async function checkGasVersion() {
@@ -1449,6 +1509,7 @@ async function checkGasVersion() {
   try {
     const res = await fetch(GAS_API_URL, { method: 'GET' });
     const json = await res.json();
+    serverDefaultModel = json.defaultModel || '';
     renderVersion(json.version || '不明（旧バージョン）');
   } catch (err) {
     renderVersion(null, err.message);
@@ -1458,6 +1519,7 @@ async function checkGasVersion() {
 // ---------- 起動時にセッション確認 ----------
 (function init() {
   document.querySelectorAll('.app-ver').forEach((el) => { el.textContent = APP_VERSION.split(' ')[0]; });
+  setupModelPicker();
   renderVersion(null);
   checkGasVersion();
   const token = localStorage.getItem('odp_token');
